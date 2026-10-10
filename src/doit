@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+"""Do It: plain-English commands for Linux (prototype).
+
+Usage:
+  doit                  asks "Do what? I am waiting..." and waits for you
+  doit <what you want>  e.g. doit turn off, doit install brave
+  doit list             everything Do It knows how to do
+  doit --dry-run ...    show what would run, without running anything
+"""
+
+import difflib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+VERSION = "0.1.0"
+DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}
+NEVER_MIND = {"nothing", "never mind", "nevermind", "cancel", "quit", "exit", "stop"}
+
+
+# ---------- where things live ----------
+
+def config_dir():
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "doit"
+
+
+def data_dir():
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "doit"
+
+
+def find_index():
+    """Look for the command index: env override, next to this script, then installed copies."""
+    candidates = []
+    if os.environ.get("DOIT_COMMANDS"):
+        candidates.append(Path(os.environ["DOIT_COMMANDS"]))
+    candidates.append(Path(__file__).resolve().parent.parent / "data" / "commands.json")
+    candidates.append(data_dir() / "commands.json")
+    candidates.append(Path("/usr/share/doit/commands.json"))
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise FileNotFoundError("Couldn't find commands.json. Is Do It installed correctly?")
+
+
+# ---------- text handling ----------
+
+def normalize(text):
+    """Lowercase, trim punctuation at the ends, squash spaces, drop a polite 'please'."""
+    text = " ".join(text.lower().split())
+    text = text.strip(" !?.,")
+    for polite in ("please ", "pls "):
+        if text.startswith(polite):
+            text = text[len(polite):]
+    for polite in (" please", " pls"):
+        if text.endswith(polite):
+            text = text[: -len(polite)]
+    return text.strip(" !?.,")
+
+
+def highlight(text):
+    if sys.stdout.isatty() and not os.environ.get("NO_COLOR"):
+        return f"\033[1;33m{text}\033[0m"
+    return text
+
+
+def ask(prompt):
+    """Read a line from the user. Returns None if they hit Ctrl-C or Ctrl-D."""
+    try:
+        return input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def interactive():
+    return sys.stdin.isatty()
+
+
+# ---------- index and settings ----------
+
+def load_index(path):
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    phrase_map = {}
+    for entry in data["commands"]:
+        for phrase in entry["phrases"]:
+            key = normalize(phrase)
+            if key in phrase_map:
+                print(f"Note: \"{phrase}\" is listed twice in commands.json; "
+                      f"using {phrase_map[key]['id']}.", file=sys.stderr)
+                continue
+            phrase_map[key] = entry
+    return data["commands"], phrase_map
+
+
+def load_settings():
+    path = config_dir() / "settings.json"
+    settings = dict(DEFAULT_SETTINGS)
+    if path.is_file():
+        try:
+            with open(path, encoding="utf-8") as f:
+                settings.update(json.load(f))
+        except (OSError, ValueError):
+            print("Note: settings file couldn't be read, using defaults.", file=sys.stderr)
+    return settings
+
+
+def save_settings(settings):
+    path = config_dir() / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+
+
+def is_yes(answer, settings):
+    if answer is None:
+        return False
+    return normalize(answer) in {w.lower() for w in settings["yes_words"]}
+
+
+def yes_hint(settings):
+    return " or ".join(f"'{w}'" for w in settings["yes_words"])
+
+
+# ---------- logging ----------
+
+def log_path():
+    return data_dir() / "command-log.tsv"
+
+
+def first_run_logging(settings):
+    """Ask once whether to keep a log. Non-interactive runs never ask and never log."""
+    if settings["logging"] is not None or not interactive():
+        return
+    print("Before we start: want me to keep a log of every command I run,")
+    print("so you can look back at what happened later?")
+    print("(You can change this anytime with: doit logging on / doit logging off)")
+    answer = ask(f"Keep a log? (type {yes_hint(settings)} for yes, anything else for no) ")
+    settings["logging"] = is_yes(answer, settings)
+    save_settings(settings)
+    print("Okay, I'll keep a log." if settings["logging"] else "Okay, no log.")
+    print()
+
+
+def write_log(settings, phrase, command, code):
+    if settings.get("logging") is not True:
+        return
+    path = log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().isoformat(timespec="seconds")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"{stamp}\t{phrase}\t{command}\t{code}\n")
+
+
+# ---------- built-in commands ----------
+
+def show_list(commands):
+    print("Here's what I know how to do. Type: doit <phrase>\n")
+    by_category = {}
+    for entry in commands:
+        by_category.setdefault(entry["category"], []).append(entry)
+    for category, entries in by_category.items():
+        print(f"{category}:")
+        for entry in entries:
+            phrases = ", ".join(f'"{p}"' for p in entry["phrases"])
+            print(f"  {phrases}")
+            print(f"      {entry['explanation']}")
+        print()
+    print("Settings: doit logging on|off, doit answer easy|strict, "
+          "doit answer word <word>, doit history")
+
+
+def show_history(settings):
+    path = log_path()
+    if settings.get("logging") is not True:
+        print("Logging is off, so there's no history. Turn it on with: doit logging on")
+        if not path.is_file():
+            return 0
+    if not path.is_file():
+        print("Nothing logged yet.")
+        return 0
+    lines = path.read_text(encoding="utf-8").splitlines()[-20:]
+    print("Last commands I ran (newest at the bottom):\n")
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) != 4:
+            continue
+        stamp, phrase, command, code = parts
+        result = "worked" if code == "0" else f"failed (code {code})"
+        print(f"  {stamp}  \"{phrase}\"  ->  {command}  [{result}]")
+    return 0
+
+
+def handle_builtin(norm, settings, commands):
+    """Returns an exit code if this was a built-in, or None if it wasn't."""
+    words = norm.split()
+    if norm in ("list", "help", "what can you do", "what do you know"):
+        show_list(commands)
+        return 0
+    if norm in ("history", "show me what you did", "what did you do"):
+        return show_history(settings)
+    if norm == "version":
+        print(f"Do It {VERSION}")
+        return 0
+    if len(words) == 2 and words[0] == "logging" and words[1] in ("on", "off"):
+        settings["logging"] = words[1] == "on"
+        save_settings(settings)
+        print(f"Logging is now {words[1]}."
+              + (" It starts from now; nothing before this was recorded."
+                 if words[1] == "on" else ""))
+        return 0
+    if len(words) == 2 and words[0] == "answer" and words[1] in ("easy", "strict"):
+        settings["yes_words"] = ["y", "yes"] if words[1] == "easy" else ["yes"]
+        save_settings(settings)
+        print(f"To say yes, you'll now type: {yes_hint(settings)}")
+        return 0
+    if len(words) == 3 and words[0] == "answer" and words[1] == "word":
+        settings["yes_words"] = [words[2]]
+        save_settings(settings)
+        print(f"To say yes, you'll now type: {yes_hint(settings)}")
+        return 0
+    return None
+
+
+# ---------- running a command ----------
+
+def explain_and_confirm(entry, settings):
+    print(entry["explanation"])
+    if entry.get("source_url"):
+        print("\nThis downloads and runs a script from:")
+        print(f"   {highlight(entry['source_url'])}")
+        print("That's the vendor's own official installer, not something changed by Do It.")
+    if entry.get("warning"):
+        print(f"\nHeads up: {entry['warning']}")
+    print(f"\nReal command: {entry['command']}")
+    if not entry.get("confirm"):
+        return True
+    if not interactive():
+        print("This one needs a yes from you, so run it in a terminal.")
+        return False
+    answer = ask(f"Go ahead? (type {yes_hint(settings)} to continue) ")
+    return is_yes(answer, settings)
+
+
+def run_entry(entry, phrase, settings, dry_run):
+    if dry_run:
+        print(f"[dry run] Would run: {entry['command']}")
+        return 0
+    try:
+        code = subprocess.run(entry["command"], shell=True).returncode
+    except KeyboardInterrupt:
+        code = 130
+    write_log(settings, phrase, entry["command"], code)
+    if code != 0:
+        print(f"\nThat didn't work (exit code {code}).")
+    return code
+
+
+def handle(text, commands, phrase_map, settings, dry_run):
+    """Returns an exit code, or None if the phrase wasn't recognised."""
+    norm = normalize(text)
+    code = handle_builtin(norm, settings, commands)
+    if code is not None:
+        return code
+    entry = phrase_map.get(norm)
+    if entry is None:
+        print(f"I don't know how to \"{text.strip()}\" yet.")
+        guesses = difflib.get_close_matches(norm, list(phrase_map), n=3, cutoff=0.6)
+        if guesses:
+            print("Did you mean: " + ", ".join(f'"{g}"' for g in guesses) + "?")
+        else:
+            print("Type 'doit list' to see what I know.")
+        return None
+    first_run_logging(settings)
+    if not explain_and_confirm(entry, settings):
+        print("Okay, not doing it.")
+        return 1
+    return run_entry(entry, norm, settings, dry_run)
+
+
+def main(argv):
+    dry_run = "--dry-run" in argv or os.environ.get("DOIT_DRY_RUN") == "1"
+    args = [a for a in argv if a != "--dry-run"]
+    if args and args[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+    if args and args[0] == "--version":
+        print(f"Do It {VERSION}")
+        return 0
+
+    try:
+        commands, phrase_map = load_index(find_index())
+    except (OSError, ValueError, KeyError) as err:
+        print(f"Do It couldn't load its command list: {err}", file=sys.stderr)
+        return 2
+    settings = load_settings()
+
+    if args:
+        code = handle(" ".join(args), commands, phrase_map, settings, dry_run)
+        return 1 if code is None else code
+
+    if not interactive():
+        print(__doc__.strip())
+        return 2
+    while True:
+        text = ask("Do what? I am waiting... ")
+        if text is None:
+            print("\nOkay, never mind.")
+            return 0
+        norm = normalize(text)
+        if not norm:
+            continue
+        if norm in NEVER_MIND:
+            print("Okay, never mind.")
+            return 0
+        code = handle(text, commands, phrase_map, settings, dry_run)
+        if code is not None:
+            return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
