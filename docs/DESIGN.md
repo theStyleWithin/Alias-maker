@@ -58,7 +58,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 67 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (120 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 71 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (122 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
 
 ## Wrapper
 
@@ -92,9 +92,11 @@ Opening Alias Maker starts the user's login shell (fish on CachyOS) in a termina
 - `fish_title`: `Let'sdostuff~` in the home folder, `Let'sdostuff~/Games` elsewhere, `Let'sdostuff~ : htop` while a program runs.
 - `fish_prompt`: `Let'sdostuff~ ❯ ` with the full folder after the name; the ❯ turns red after a failed command. This replaces the user's fish prompt inside Alias Maker only.
 
-- `fish_greeting`: CachyOS's greeting runs `fastfetch`, which draws the CachyOS logo and system info. Inside Alias Maker it runs `fastfetch --logo src/shell/doit-logo.txt --logo-type file` instead, so a big block-letter DOIT replaces the logo and the system info stays. Without fastfetch it prints DOIT on its own.
+- `fish_greeting`: shows Alias Maker's welcome (`doit --welcome`) instead of CachyOS's plain `fastfetch`.
 
 Everything else about fish (settings, functions, right-hand prompt) is unchanged, and other terminals are unaffected. The name comes from `$ALIASMAKER_NAME`, which the window sets, so it could become a setting later. Other shells (bash, zsh) start as they are for now. The window reads the title through VTE's older `window-title-changed` signal or the newer `termprop-changed` one, whichever exists. Fish couldn't be run in the build sandbox, so the script was checked by hand.
+
+**The DOIT welcome.** Every Alias Maker window opens with a big block-letter DOIT (`src/shell/doit-logo.txt`) and the PC's info beside it, the way CachyOS shows its logo. `doit --welcome` makes it: with fastfetch installed (CachyOS ships it) it runs `fastfetch --logo doit-logo.txt --logo-type file --logo-color-1 96`, so the logo is swapped and fastfetch's full info stays; without fastfetch, or if it fails, Alias Maker prints its own info next to DOIT: user@host, OS, kernel, uptime, shell, terminal, CPU, memory and disk, read from `/etc/os-release` and `/proc`. With fish, the welcome comes from `fish_greeting`; with other shells, the window writes it before starting the shell, so it's shown once either way. Konsole keeps the CachyOS logo.
 
 **/clippy.** Typing `/clippy <topic>` in the Alias Maker window looks the topic up and never runs it. Fish doesn't know commands starting with `/`, so it calls `fish_command_not_found`; the fish script catches `/clippy` there and runs `doit clippy <topic>`, and passes anything else to the handler that was there before (CachyOS's or fish's own). The slash word is one setting (`HELPER_NAME`).
 

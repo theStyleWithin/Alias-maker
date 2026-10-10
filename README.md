@@ -30,15 +30,15 @@ Let'sdostuff~ ❯
 Let'sdostuff~/Games ❯
 ```
 
-When a terminal opens, you get a big DOIT where the CachyOS logo would be, with your system info still next to it:
+Every Alias Maker window opens with a big DOIT and your PC's info next to it (from fastfetch when it's installed, as on CachyOS, or Alias Maker's own when it isn't):
 
 ```
-██████╗   ██████╗  ██╗ ████████╗
-██╔══██╗ ██╔═══██╗ ██║ ╚══██╔══╝
-██║  ██║ ██║   ██║ ██║    ██║
-██║  ██║ ██║   ██║ ██║    ██║
-██████╔╝ ╚██████╔╝ ██║    ██║
-╚═════╝   ╚═════╝  ╚═╝    ╚═╝
+██████╗   ██████╗  ██╗ ████████╗   you@your-pc
+██╔══██╗ ██╔═══██╗ ██║ ╚══██╔══╝   OS: CachyOS
+██║  ██║ ██║   ██║ ██║    ██║      CPU: …
+██║  ██║ ██║   ██║ ██║    ██║      Memory: …
+██████╔╝ ╚██████╔╝ ██║    ██║      Shell: fish
+╚═════╝   ╚═════╝  ╚═╝    ╚═╝      Terminal: Alias Maker
 ```
 
 The folder after it still tells you where you are (`~` is your home folder), and the ❯ turns red when the last command failed. It's still the same fish underneath, with all your settings, and only inside Alias Maker.

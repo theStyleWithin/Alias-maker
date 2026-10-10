@@ -872,6 +872,94 @@ def read_manual_page(name):
     return subprocess.run(["man", name]).returncode
 
 
+# ---------- the welcome: DOIT and your PC's info ----------
+
+def logo_path():
+    return Path(__file__).resolve().parent / "shell" / "doit-logo.txt"
+
+
+def logo_lines():
+    try:
+        return logo_path().read_text(encoding="utf-8").replace("$1", "").rstrip("\n").splitlines()
+    except OSError:
+        return ["DOIT"]
+
+
+def read_text_file(path):
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def pc_info():
+    """Basic facts about this PC, read straight from the system (for when fastfetch is missing)."""
+    import platform
+    import socket
+    info = []
+    user = os.environ.get("USER") or os.environ.get("LOGNAME") or "you"
+    info.append(("", f"{user}@{socket.gethostname()}"))
+    os_name = re.search(r'^PRETTY_NAME="?([^"\n]*)', read_text_file("/etc/os-release"), re.M)
+    info.append(("OS", os_name.group(1) if os_name else platform.system()))
+    info.append(("Kernel", platform.release()))
+    uptime = read_text_file("/proc/uptime").split()
+    if uptime:
+        minutes = int(float(uptime[0]) // 60)
+        hours, minutes = divmod(minutes, 60)
+        days, hours = divmod(hours, 24)
+        parts = [f"{days} day{'s' * (days != 1)}"] if days else []
+        parts += [f"{hours} hour{'s' * (hours != 1)}"] if hours else []
+        parts.append(f"{minutes} min{'s' * (minutes != 1)}")
+        info.append(("Uptime", ", ".join(parts)))
+    shell = os.environ.get("SHELL", "")
+    if shell:
+        info.append(("Shell", os.path.basename(shell)))
+    info.append(("Terminal", APP))
+    cpu = re.search(r"^model name\s*:\s*(.+)$", read_text_file("/proc/cpuinfo"), re.M)
+    if cpu:
+        info.append(("CPU", f"{cpu.group(1).strip()} ({os.cpu_count()})"))
+    meminfo = dict(re.findall(r"^(\w+):\s+(\d+) kB", read_text_file("/proc/meminfo"), re.M))
+    if "MemTotal" in meminfo and "MemAvailable" in meminfo:
+        total, free = int(meminfo["MemTotal"]), int(meminfo["MemAvailable"])
+        used = total - free
+        info.append(("Memory", f"{used / 1048576:.2f} GiB / {total / 1048576:.2f} GiB "
+                               f"({round(100 * used / total)}%)"))
+    try:
+        disk = shutil.disk_usage("/")
+        info.append(("Disk (/)", f"{disk.used / 1073741824:.2f} GiB / {disk.total / 1073741824:.2f} GiB "
+                                 f"({round(100 * disk.used / disk.total)}%)"))
+    except OSError:
+        pass
+    return info
+
+
+def welcome_text(color=True):
+    """DOIT with this PC's info beside it. Uses fastfetch when it's installed."""
+    fastfetch = shutil.which("fastfetch")
+    if fastfetch and logo_path().is_file():
+        try:
+            result = subprocess.run([fastfetch, "--logo", str(logo_path()), "--logo-type", "file",
+                                     "--logo-color-1", "96", "--pipe", "false" if color else "true"],
+                                    capture_output=True, text=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.rstrip("\n") + "\n"
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    cyan, bold, reset = ("\033[1;96m", "\033[1;96m", "\033[0m") if color else ("", "", "")
+    logo = logo_lines()
+    width = max(len(line) for line in logo)
+    info = pc_info()
+    lines = []
+    for row in range(max(len(logo), len(info))):
+        left = logo[row] if row < len(logo) else ""
+        right = ""
+        if row < len(info):
+            key, value = info[row]
+            right = f"{bold}{key}{reset}: {value}" if key else f"{bold}{value}{reset}"
+        lines.append(f"{cyan}{left.ljust(width)}{reset}   {right}".rstrip())
+    return "\n".join(lines) + "\n"
+
+
 # ---------- the session ----------
 
 class State:
@@ -1318,6 +1406,9 @@ def main(argv):
         return 0
     if args and args[0] == "--version":
         print(f"{APP} {VERSION}")
+        return 0
+    if args and args[0] == "--welcome":  # what Alias Maker shows when a terminal opens
+        sys.stdout.write(welcome_text(color=sys.stdout.isatty() and not os.environ.get("NO_COLOR")))
         return 0
 
     migrate_old_dirs()

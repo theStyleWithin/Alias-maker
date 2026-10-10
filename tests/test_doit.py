@@ -769,5 +769,34 @@ class TestRealTerminalCommands(DoitTestCase):
                          ("check drives", "check-drives", "check-my-drives"))
 
 
+
+class TestWelcome(DoitTestCase):
+    def test_without_fastfetch_shows_doit_and_pc_info(self):
+        os.environ["SHELL"] = "/usr/bin/fish"
+        code, out, _ = self.run_doit(["--welcome"], tty=False)
+        self.assertEqual(code, 0)
+        lines = out.splitlines()
+        self.assertTrue(lines[0].startswith("██████╗   ██████╗  ██╗ ████████╗"))
+        for label in ("OS:", "Kernel:", "Shell: fish", "Terminal: Alias Maker", "Memory:", "Disk (/):"):
+            self.assertIn(label, out)
+        self.assertNotIn("\033[", out)  # no colors when not printing to a terminal
+        self.assertNotIn("$1", out)
+
+    def test_with_fastfetch_uses_it_with_the_doit_logo(self):
+        make_program(self.programs, "fastfetch", 'printf "FASTFETCH %s\\n" "$*"')
+        code, out, _ = self.run_doit(["--welcome"], tty=False)
+        self.assertEqual(code, 0)
+        self.assertIn(f"FASTFETCH --logo {doit.logo_path()} --logo-type file --logo-color-1 96", out)
+
+    def test_falls_back_if_fastfetch_fails(self):
+        make_program(self.programs, "fastfetch", "exit 1")
+        _, out, _ = self.run_doit(["--welcome"], tty=False)
+        self.assertIn("Terminal: Alias Maker", out)
+
+    def test_colors_in_a_terminal(self):
+        text = doit.welcome_text(color=True)
+        self.assertIn("\033[1;96m", text)
+
+
 if __name__ == "__main__":
     unittest.main()

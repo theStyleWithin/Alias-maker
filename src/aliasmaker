@@ -537,6 +537,12 @@ class TerminalWindow(Gtk.ApplicationWindow):
         env["ALIASMAKER_NAME"] = TERMINAL_NAME
         envv = [f"{key}={value}" for key, value in env.items()]
         cwd = workdir if workdir and os.path.isdir(workdir) else os.path.expanduser("~")
+        if not command and os.path.basename(shell) != "fish":
+            # fish shows the DOIT welcome itself (lets-do-stuff.fish); for other shells, show it here
+            try:
+                self.term.feed(core.welcome_text().replace("\n", "\r\n").encode())
+            except (TypeError, OSError):
+                pass
         args = [Vte.PtyFlags.DEFAULT, cwd, argv, envv, GLib.SpawnFlags.SEARCH_PATH,
                 None, None, -1, None, None, None]
         try:
