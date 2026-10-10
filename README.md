@@ -66,7 +66,7 @@ The rest of the menu works like Konsole's: New Window, Copy, Paste, Full Screen,
 
 ## Install
 
-**The easy way: the installer.** Download `alias-maker-<version>-installer.run` (from the repo's **Releases** page), then in a terminal:
+**The easy way: the installer.** Get the installer file, `alias-maker-<version>-installer.run` (or make it yourself, see below), then in a terminal:
 
 ```
 bash ~/Downloads/alias-maker-0.6.0-installer.run
