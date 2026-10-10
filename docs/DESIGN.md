@@ -98,7 +98,11 @@ Everything else about fish (settings, functions, right-hand prompt) is unchanged
 
 **The DOIT welcome.** Every Alias Maker window opens with a big block-letter DOIT (`src/shell/doit-logo.txt`) and the PC's info beside it, the way CachyOS shows its logo. `doit --welcome` makes it: with fastfetch installed (CachyOS ships it) it runs `fastfetch --logo doit-logo.txt --logo-type file --logo-color-1 96`, so the logo is swapped and fastfetch's full info stays. Inside the window it also passes `--config` with Alias Maker's own module list (`fastfetch-welcome.jsonc` in the data folder) whose Terminal line says `aliasmaker`: the app is Python underneath, so fastfetch would otherwise say `python3`, and newer fastfetch only takes that through a config file. `doit --welcome` replaces itself with fastfetch so fastfetch sees fish as its parent and reports the right shell. The window also names its own process `aliasmaker` (for btop, htop and ps) and sets `TERM_PROGRAM=aliasmaker`; without fastfetch, or if it fails, Alias Maker prints its own info next to DOIT: user@host, OS, kernel, uptime, shell, terminal, CPU, memory and disk, read from `/etc/os-release` and `/proc`. With fish, the welcome comes from `fish_greeting`; with other shells, the window writes it before starting the shell, so it's shown once either way. Konsole keeps the CachyOS logo.
 
+Mockup: [welcome.png](mockups/welcome.png)
+
 **/clippy.** Typing `/clippy <topic>` in the Alias Maker window looks the topic up and never runs it. `/clippy` is a fish abbreviation (`abbr --position command --regex '^/clippy$'`, fish 3.6 and newer): it turns into `doit clippy` when space or Enter is pressed, and fish colors it as a known command instead of red. As a backup for older fish, `fish_command_not_found` also catches `/clippy` and runs `doit clippy <topic>`, and passes anything else to the handler that was there before (CachyOS's or fish's own). Fish function names can't contain `/`, so a function isn't possible. The slash word is one setting (`HELPER_NAME`).
+
+Mockups: [clippy-typing.png](mockups/clippy-typing.png), [clippy.png](mockups/clippy.png)
 
 What it searches:
 
@@ -110,7 +114,7 @@ Words are matched forgivingly: endings are trimmed (chrooting → chroot, mounte
 
 The name `/clippy` was the author's choice. Microsoft owns the Clippy character and trademark; the command uses only the word, with no Clippy artwork.
 
-The ☰ menu, top to bottom. Custom Commands opens to the side of the menu, like Konsole's submenus (a `Gtk.PopoverMenu` with the NESTED flag), instead of GTK's default of sliding the whole menu over:
+The ☰ menu, top to bottom. Custom Commands opens to the side of the menu, like Konsole's submenus (a `Gtk.PopoverMenu` with the NESTED flag), instead of GTK's default of sliding the whole menu over (mockup: [menu.png](mockups/menu.png)):
 
 ```
 Database                 every program on this PC
@@ -140,6 +144,8 @@ Copy and Paste buttons also sit in the title bar, as in Konsole. Plain Ctrl+C st
 
 **Database window:** a search box, a Rescan button, and every program on this PC in a spreadsheet-style table. Before the first scan it shows an empty state with a "Scan My Installed Software" button. For a picked program: **Make Custom Command** (pre-fills its name so options can be added), **Read Manual** (runs `man <name>` in the terminal), **Type Into Terminal** (types the name at the prompt without running it). Double-clicking a program also makes a custom command.
 
+Mockup: [database.png](mockups/database.png)
+
 **Tables.** The Database and the Custom Command List are GTK column views drawn like a spreadsheet: a border around the table, a line between every row and every column, bold column titles and even padding in each cell. Rows are all the same height: long text ends in "…" and hovering shows all of it. Columns can be resized, and clicking a title sorts by that column. The table only draws the rows on screen, so all ~2,000 programs are listed with no cap.
 
 | Table | Columns |
@@ -155,13 +161,23 @@ With no search, the Database is listed A to Z; with a search, best matches come 
 
 **Custom Commands window:** a second database, in the same kind of table, that lists only the user's own commands and what they run. Buttons: **Create Command**, **Edit**, **Delete**, **Run in Terminal** (types `doit '<phrase>'` and presses Enter; the quotes keep fish and bash from treating `*`, `$` and the like specially). Opened from Edit Command or Delete Command in the menu, it shows a "pick the command you want to edit/delete" hint, and double-clicking a command does that action.
 
+Mockup: [custom-commands.png](mockups/custom-commands.png)
+
 **Create/Edit dialog:** what to type, what it runs, and "Ask before running it every time" (forced on for `sudo` commands). Alias Maker's own words are refused; a phrase that's already taken shows what it runs now and needs a second Save to replace it. When editing, the command's own phrase doesn't count as a clash. Editing keeps the command's place in the list.
+
+Mockup: [create-command.png](mockups/create-command.png)
 
 **Terminal Settings window:** a switch for the command log ("On: commands are being recorded" / "Off" / "Off (not chosen yet)"), a **View Command Log** button, and how to say yes: "y or yes", "Only the full word yes", or "My own word" (one word, no spaces). Settings are read fresh each time it opens, since `doit logging` and `doit answer` in the terminal change the same file. Turning the log off keeps what's already recorded.
 
+Mockup: [terminal-settings.png](mockups/terminal-settings.png)
+
 **Command Log window:** the log (`~/.local/share/alias-maker/command-log.tsv`) as a read-only table, newest first: When · You typed · Real command · Result ("Worked" or "Failed (code 3)"). It builds up gradually when it opens, like the other tables; the footer counts commands and failures and shows the file's location. **Open Log File** opens the raw file; **Refresh** reloads. With the log off and nothing recorded, it says where to turn it on. The point is troubleshooting: if something goes wrong, users can see exactly what ran.
 
+Mockup: [command-log.png](mockups/command-log.png)
+
 **Delete dialog:** says plainly that only the alias is deleted and that the program it points to stays on the computer, unchanged. Cancel has the focus, so Enter never deletes by accident.
+
+Mockup: [delete-command.png](mockups/delete-command.png)
 
 ### Deleting never touches real commands
 
@@ -194,6 +210,8 @@ On CachyOS, shortcuts are normally made by hand: `~/.config/fish/config.fish` lo
 - **Names already taken** are never written, so nothing real is hidden: programs on `PATH`, fish's own commands and keywords, names defined in CachyOS's fish config or the user's `config.fish`, and functions in `~/.config/fish/functions/`. Those commands work as `doit <name>`. (Fish loads `conf.d` before `config.fish`, so CachyOS's aliases would win anyway.)
 - Deleting a command removes its function from the file; the program it pointed to is untouched.
 - **Works right away in Alias Maker.** The file ends with `set -g __aliasmaker_shortcut_names ...`. Before each prompt, the window's fish script checks whether the file changed and, if so, erases the old names and loads it again, so a command made, renamed or deleted (in the window or with `doit create`) takes effect in every open Alias Maker window. If the command is typed at a prompt that was already waiting, the not-found handler reloads and runs it. Other terminals pick it up in a new window, and `doit create` says which applies.
+
+  Mockup: [doit-create.png](mockups/doit-create.png)
 - The Custom Commands table shows this in a "Works on its own" column (the name, or "doit only").
 
 `doit create` now asks "What command do you want it to point to?" first (type it, or press Enter to search this PC or start from an example), then "Name the new command:".

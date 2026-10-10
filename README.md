@@ -3,6 +3,8 @@ a simplified terminal app. A terminal app that makes it easy for the most "clini
 
 ## What it is
 
+> The pictures in this README are mockups drawn from the code, not screenshots: Alias Maker hasn't been run on a real PC yet. The PC details in them are made up. All of them are in [docs/mockups](docs/mockups/).
+
 Alias Maker is its own terminal app, a window like Konsole running your normal shell. Its ☰ menu adds:
 
 ```
@@ -15,13 +17,29 @@ Create Command
 Terminal Settings
 ```
 
+![The ☰ menu with Custom Commands open to the side](docs/mockups/menu.png)
+
 - **Database:** every program installed on your PC in a spreadsheet-style table (Command, What it does, Package, Location), searchable by what it does ("drives", "wifi", "battery"), with the best match on top (search "drives" and `lsblk` comes first). Click a column title to sort by it. It's empty until Alias Maker scans your installed software, which happens the first time you open it. Pick a program to read its manual, type it into the terminal, or make a custom command for it. It opens in its own window, the table builds up row by row, and it's read-only.
+
+  ![The Database window searching "drives", with lsblk first](docs/mockups/database.png)
+
 - **Create Command:** make your own phrase for any command, with no word restrictions. Make `just check my fucking drives` run `lsblk -f`, then type `doit just check my fucking drives` in the terminal. It always shows the real command first.
+
+  ![The Create Command window offering one-word names](docs/mockups/create-command.png)
+
 - **Custom Commands:** appears once you've made your first command. It's a second database, in the same kind of table (You type, It runs, Asks first, Made on), that lists only the commands you made, with Create, Edit and Delete. It's the one table you can edit directly: click a cell and type (Enter saves, Esc undoes), or tick and untick Asks first.
+
+  ![The Custom Commands table](docs/mockups/custom-commands.png)
 
 - **Terminal Settings:** turn the command log on or off, and open the **Command Log**: a table of every command doit ran (when, what you typed, the real command, whether it worked), newest first. If something gets messed up, this is where you check what happened. You also choose how to say yes here: "y or yes", only "yes", or your own word.
 
+  ![Terminal Settings](docs/mockups/terminal-settings.png)
+
+  ![The Command Log](docs/mockups/command-log.png)
+
 **Deleting a command only deletes your alias.** The real command it points to is never deleted or changed, so nothing on your computer can break. Your aliases only work after `doit`, so they can't replace or interfere with your computer's real commands either: an alias called `ls` doesn't change `ls`.
+
+![Delete Command: only the alias is deleted](docs/mockups/delete-command.png)
 
 **It's yours, so it says so:** where other terminals show `fish ~`, Alias Maker says **Let'sdostuff~**, both in the title and on the line where you type:
 
@@ -32,36 +50,15 @@ Let'sdostuff~/Games ❯
 
 Every Alias Maker window opens with a big DOIT and your PC's info next to it (from fastfetch when it's installed, as on CachyOS, or Alias Maker's own when it isn't):
 
-```
-██████╗   ██████╗  ██╗ ████████╗   you@your-pc
-██╔══██╗ ██╔═══██╗ ██║ ╚══██╔══╝   OS: CachyOS
-██║  ██║ ██║   ██║ ██║    ██║      CPU: …
-██║  ██║ ██║   ██║ ██║    ██║      Memory: …
-██████╔╝ ╚██████╔╝ ██║    ██║      Shell: fish
-╚═════╝   ╚═════╝  ╚═╝    ╚═╝      Terminal: aliasmaker
-```
+![A new Alias Maker window: DOIT, the PC's info (Terminal: aliasmaker) and the Let'sdostuff~ prompt](docs/mockups/welcome.png)
 
 The folder after it still tells you where you are (`~` is your home folder), and the ❯ turns red when the last command failed. It's still the same fish underneath, with all your settings, and only inside Alias Maker.
 
 **/clippy, the helper:** type `/clippy` and what you're wondering about, and it looks it up instead of running anything. As soon as you press space, `/clippy` turns into `doit clippy` (so it's never shown in red as an unknown command):
 
-```
-Let'sdostuff~ ❯ doit clippy chrooting
-/clippy: Here's what I found about "chrooting". (I'm only looking it up, not running anything.)
+![Typing /clippy: white, then doit clippy after a space; a typo like /clipy stays red](docs/mockups/clippy-typing.png)
 
-CachyOS wiki
-  1) CachyOS chroot Helper - Helper tool to make it easier to chroot into systems
-     https://wiki.cachyos.org/features/cachy_chroot/
-
-Arch Wiki
-  2) Chroot
-     https://wiki.archlinux.org/title/Chroot
-
-On this PC (manual pages, work without internet)
-  3) chroot - run command or interactive shell with special root directory   (manual: man chroot)
-
-Open one? Type a number 1-3 (Enter to skip):
-```
+![/clippy chrooting: CachyOS wiki, Arch Wiki and manual page results](docs/mockups/clippy.png)
 
 Pick a number and the page opens in your browser, or the manual opens right in the terminal. Plain questions work too: `/clippy how do I set up gaming`. Without internet it still shows what's on your PC (and wiki pages it saw before). It's not AI: it only shows real pages. `doit clippy chrooting` does the same thing.
 
@@ -111,18 +108,7 @@ The old-fashioned way to make a shortcut on CachyOS is to edit fish's config fil
 
 One rule: **a terminal command can't have spaces.** The terminal reads the first word as the command, so `just check my fucking drives` would make it look for a program called `just`. When you name a command with spaces, Alias Maker offers one-word versions:
 
-```
-Let'sdostuff~ ❯ doit create
-What command do you want it to point to? lsblk -f
-Name the new command: just check my fucking drives
-
-"just check my fucking drives" has spaces, so the terminal can't use it as a command
-on its own (it would look for a program called "just"). Pick one:
-  1) doit check drives                    shorter, type it with doit in front
-  2) check-drives                         shorter, works on its own
-  3) just-check-my-fucking-drives         your words with dashes, works on its own
-  4) doit just check my fucking drives    keep it, type it with doit in front
-```
+![doit create in the terminal: picking check-drives, then using it right away](docs/mockups/doit-create.png)
 
 - **One-word names** (like `check-drives`) work on their own and with `doit` in front.
 - **Names with spaces** work with `doit` in front.
