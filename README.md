@@ -81,7 +81,7 @@ Everything you type normally still works. `doit` adds plain-English commands:
 |---|---|
 | `doit` | Asks "Do what? I am waiting..." and waits for you |
 | `doit turn off` | Shuts down (no question asked) |
-| `doit install brave` | Shows where the installer comes from, then asks before running |
+| `doit install brave` | Points to the Brave browser installation command in the Brave browser guide and installs Brave easily |
 | `doit <your phrase>` | Runs one of your custom commands |
 | `doit search drives` | Searches the Database from the terminal |
 | `doit list` | The easy commands |
