@@ -7,6 +7,7 @@ It runs your normal shell (fish on CachyOS), like Konsole. The ☰ menu adds:
   Custom Commands   appears once you've made your first command:
                     Custom Command List, Create, Edit, Delete
   Create Command    make your own phrase: doit <your phrase> runs the real command
+  Terminal Settings the command log (on/off, and a table of what ran) and how to say yes
 
 Deleting a custom command only deletes your alias, never the real command.
 
@@ -475,6 +476,7 @@ class TerminalWindow(Gtk.ApplicationWindow):
             custom.append("Delete Command", "win.delete-command")
             ours.append_submenu("Custom Commands", custom)
         ours.append("Create Command", "win.create-command")
+        ours.append("Terminal Settings", "win.terminal-settings")
         menu.append_section(None, ours)
         sections = [
             [("New Window", "win.new-window", "<Control><Shift>n"),
@@ -506,6 +508,7 @@ class TerminalWindow(Gtk.ApplicationWindow):
             "create-command": lambda: self.app.show_create(self),
             "edit-command": lambda: self.app.show_custom(self, "edit"),
             "delete-command": lambda: self.app.show_custom(self, "delete"),
+            "terminal-settings": lambda: self.app.show_settings(self),
             "new-window": self.app.new_window,
             "copy": self.copy,
             "paste": self.paste,
@@ -1135,6 +1138,216 @@ class DeleteDialog(Gtk.Window):
         self.app.custom_changed(open_list=False)
 
 
+# ---------- Terminal Settings and the Command Log ----------
+
+def section_heading(text):
+    label = text_label(text, "heading", wrap=False)
+    label.set_margin_top(6)
+    return label
+
+
+class SettingsWindow(Gtk.Window):
+    """Terminal Settings: the command log and how to say yes."""
+
+    def __init__(self, app):
+        super().__init__(title=f"Terminal Settings — {core.APP}")
+        self.app = app
+        self.loading = False
+        self.set_default_size(560, -1)
+        self.set_hide_on_close(True)
+        layout = padded_box(spacing=8)
+
+        layout.append(section_heading("Command log"))
+        layout.append(text_label("Keep a record of every command doit runs, so if something goes "
+                                 "wrong you can check what happened. It records from the moment "
+                                 "you turn it on.", "dim-label"))
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.log_switch = Gtk.Switch()
+        self.log_switch.set_valign(Gtk.Align.CENTER)
+        self.log_switch.connect("notify::active", lambda *_: self.on_log_switch())
+        self.log_state = text_label("", wrap=False)
+        self.log_state.set_hexpand(True)
+        view = Gtk.Button(label="View Command Log…")
+        view.connect("clicked", lambda *_: self.app.show_log(self))
+        row.append(self.log_switch)
+        row.append(self.log_state)
+        row.append(view)
+        layout.append(row)
+
+        layout.append(section_heading("Saying yes"))
+        layout.append(text_label("When doit asks before running something, what counts as yes?",
+                                 "dim-label"))
+        self.easy = Gtk.CheckButton(label="y or yes")
+        self.strict = Gtk.CheckButton(label="Only the full word yes")
+        self.strict.set_group(self.easy)
+        own_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.own = Gtk.CheckButton(label="My own word:")
+        self.own.set_group(self.easy)
+        self.own_word = Gtk.Entry()
+        self.own_word.set_placeholder_text("for example: doit")
+        self.own_word.set_hexpand(True)
+        own_row.append(self.own)
+        own_row.append(self.own_word)
+        for widget in (self.easy, self.strict):
+            layout.append(widget)
+        layout.append(own_row)
+        for button in (self.easy, self.strict, self.own):
+            button.connect("toggled", lambda button: self.on_yes_choice(button))
+        self.own_word.connect("activate", lambda *_: self.save_own_word())
+        focus = Gtk.EventControllerFocus()
+        focus.connect("leave", lambda *_: self.save_own_word())
+        self.own_word.add_controller(focus)
+
+        self.message = text_label("")
+        self.message.set_visible(False)
+        layout.append(self.message)
+        self.set_child(layout)
+        self.reload()
+
+    def reload(self):
+        """Show what's saved now (doit in the terminal can change these too)."""
+        self.loading = True
+        settings = core.load_settings()
+        logging = settings.get("logging")
+        self.log_switch.set_active(logging is True)
+        self.update_log_state(logging)
+        words = [w.lower() for w in settings.get("yes_words", ["y", "yes"])]
+        if sorted(words) == ["y", "yes"]:
+            self.easy.set_active(True)
+        elif words == ["yes"]:
+            self.strict.set_active(True)
+        else:
+            self.own.set_active(True)
+            self.own_word.set_text(words[0] if words else "")
+        self.own_word.set_sensitive(self.own.get_active())
+        self.loading = False
+
+    def update_log_state(self, logging):
+        self.log_state.set_label({True: "On: commands are being recorded",
+                                  False: "Off: nothing is recorded",
+                                  None: "Off (not chosen yet)"}[logging])
+
+    def say(self, text, kind):
+        for css in ("error", "success"):
+            self.message.remove_css_class(css)
+        self.message.add_css_class(kind)
+        self.message.set_label(text)
+        self.message.set_visible(True)
+
+    def on_log_switch(self):
+        if self.loading:
+            return
+        settings = core.load_settings()
+        settings["logging"] = self.log_switch.get_active()
+        core.save_settings(settings)
+        self.update_log_state(settings["logging"])
+        self.say("Command log turned on. It records from now on." if settings["logging"]
+                 else "Command log turned off. What's already recorded is kept.", "success")
+
+    def on_yes_choice(self, button):
+        self.own_word.set_sensitive(self.own.get_active())
+        if self.loading or not button.get_active():
+            return
+        if button is self.easy:
+            self.save_yes_words(["y", "yes"])
+        elif button is self.strict:
+            self.save_yes_words(["yes"])
+        else:
+            self.own_word.grab_focus()
+            self.save_own_word()
+
+    def save_own_word(self):
+        if self.loading or not self.own.get_active():
+            return
+        word = core.normalize(self.own_word.get_text())
+        if not word:
+            self.say("Type the word you want to use for yes.", "error")
+            return
+        if " " in word:
+            self.say("Pick a single word, without spaces.", "error")
+            return
+        self.save_yes_words([word])
+
+    def save_yes_words(self, words):
+        settings = core.load_settings()
+        if settings.get("yes_words") == words:
+            return
+        settings["yes_words"] = words
+        core.save_settings(settings)
+        self.say("To say yes, you'll now type: " + core.yes_hint(settings), "success")
+
+
+class LogWindow(Gtk.Window):
+    """The command log as a table, newest first. Read-only."""
+
+    def __init__(self, app):
+        super().__init__(title=f"Command Log — {core.APP}")
+        self.app = app
+        self.set_default_size(920, 520)
+        self.set_hide_on_close(True)
+        layout = padded_box()
+        layout.append(text_label("Every command doit ran while the log was on, newest first. "
+                                 "If something went wrong, this shows what was run and whether "
+                                 "it worked.", "dim-label"))
+        self.stack = Gtk.Stack()
+        self.stack.set_vexpand(True)
+        self.empty = Gtk.Label(label="")
+        self.empty.set_justify(Gtk.Justification.CENTER)
+        self.stack.add_named(self.empty, "empty")
+        self.table = Table([
+            Column("When", lambda e: e["when"].replace("T", " "), 180),
+            Column("You typed", lambda e: f"doit {e['phrase']}", 260),
+            Column("Real command", lambda e: e["command"]),
+            Column("Result", core.log_result, 150),
+        ], on_select=lambda: None, on_activate=lambda: None)
+        self.stack.add_named(self.table.scroller, "list")
+        layout.append(self.stack)
+        self.footer = text_label("", "dim-label")
+        layout.append(self.footer)
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        buttons.set_halign(Gtk.Align.END)
+        open_file = Gtk.Button(label="Open Log File")
+        open_file.set_tooltip_text(str(core.log_path()))
+        open_file.connect("clicked", lambda *_: self.open_file())
+        refresh = Gtk.Button(label="Refresh")
+        refresh.connect("clicked", lambda *_: self.reload())
+        buttons.append(open_file)
+        buttons.append(refresh)
+        layout.append(buttons)
+        self.set_child(layout)
+        self.reload()
+
+    def reload(self, animate=False):
+        entries = list(reversed(core.read_log()))
+        logging = core.load_settings().get("logging") is True
+        if not entries:
+            self.empty.set_label("Nothing logged yet." if logging else
+                                 "The command log is off, so nothing is recorded.\n"
+                                 "Turn it on in ☰ → Terminal Settings.")
+            self.stack.set_visible_child_name("empty")
+            self.footer.set_label("")
+            self.table.set_rows([])
+            return
+        self.stack.set_visible_child_name("list")
+        failed = sum(not e["worked"] for e in entries)
+        note = f"{len(entries)} commands logged" + (f", {failed} failed" if failed else "")
+        if not logging:
+            note += ". The log is off right now, so new commands aren't being added"
+        self.final_note = note + f". Log file: {core.log_path()}"
+
+        def progress(done, total):
+            self.footer.set_label(self.final_note if done >= total else f"Loading {done:,} of {total:,}…")
+        self.table.set_rows(entries, animate=animate, on_progress=progress)
+
+    def open_file(self):
+        path = core.log_path()
+        if path.is_file():
+            core.open_link(str(path))
+        else:
+            self.footer.set_label("There's no log file yet.")
+
+
 # ---------- the app ----------
 
 class AliasMakerApp(Gtk.Application):
@@ -1147,6 +1360,8 @@ class AliasMakerApp(Gtk.Application):
         self.last_terminal = None
         self.database_window = None
         self.custom_window = None
+        self.settings_window = None
+        self.log_window = None
         try:
             _, self.phrase_map = core.load_index(core.find_index())
         except (OSError, ValueError, KeyError):
@@ -1198,6 +1413,21 @@ class AliasMakerApp(Gtk.Application):
         window.set_mode(mode)
         window.present()
         window.reload(animate=not already_open)  # builds up gradually when it opens
+
+    def show_settings(self, parent):
+        if self.settings_window is None:
+            self.settings_window = SettingsWindow(self)
+        self.settings_window.reload()
+        self.settings_window.present()
+
+    def show_log(self, parent):
+        """Opens the Command Log in its own window and builds the table up gradually."""
+        if self.log_window is None:
+            self.log_window = LogWindow(self)
+        window = self.log_window
+        already_open = window.get_visible()
+        window.present()
+        window.reload(animate=not already_open)
 
     def show_create(self, parent, command=""):
         CommandDialog(self, parent, command=command).present()

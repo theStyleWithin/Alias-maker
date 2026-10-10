@@ -34,13 +34,14 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built, untested on real hardware |
 | Konsole-style menu items and shortcuts (New Window, Copy, Paste, Full Screen, font size) | Built, untested on real hardware |
 | Text menu (`doit menu`), terminal search (`doit search`), `doit my commands`, `doit rescan` | Removed: the window's ☰ menu and Database replace them |
+| Terminal Settings in the ☰ menu: command log switch, Command Log table, yes word | Built, untested on real hardware |
 | Terminal commands kept for people learning the terminal: `doit create`, `doit forget`/`doit delete` | Built |
 | Tabs, split view, find, profiles | Not yet |
 | Plain-English explanation for every scanned program | Stretch goal |
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 59 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (92 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 59 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (106 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
 
 ## Wrapper
 
@@ -98,6 +99,7 @@ Custom Commands  ▸       only appears once the user has made a command
     Edit Command
     Delete Command
 Create Command
+Terminal Settings        the command log and how to say yes
 ──────────
 New Window               Ctrl+Shift+N
 Copy                     Ctrl+Shift+C
@@ -133,6 +135,10 @@ With no search, the Database is listed A to Z; with a search, best matches come 
 **Custom Commands window:** a second database, in the same kind of table, that lists only the user's own commands and what they run. Buttons: **Create Command**, **Edit**, **Delete**, **Run in Terminal** (types `doit '<phrase>'` and presses Enter; the quotes keep fish and bash from treating `*`, `$` and the like specially). Opened from Edit Command or Delete Command in the menu, it shows a "pick the command you want to edit/delete" hint, and double-clicking a command does that action.
 
 **Create/Edit dialog:** what to type, what it runs, and "Ask before running it every time" (forced on for `sudo` commands). Alias Maker's own words are refused; a phrase that's already taken shows what it runs now and needs a second Save to replace it. When editing, the command's own phrase doesn't count as a clash. Editing keeps the command's place in the list.
+
+**Terminal Settings window:** a switch for the command log ("On: commands are being recorded" / "Off" / "Off (not chosen yet)"), a **View Command Log** button, and how to say yes: "y or yes", "Only the full word yes", or "My own word" (one word, no spaces). Settings are read fresh each time it opens, since `doit logging` and `doit answer` in the terminal change the same file. Turning the log off keeps what's already recorded.
+
+**Command Log window:** the log (`~/.local/share/alias-maker/command-log.tsv`) as a read-only table, newest first: When · You typed · Real command · Result ("Worked" or "Failed (code 3)"). It builds up gradually when it opens, like the other tables; the footer counts commands and failures and shows the file's location. **Open Log File** opens the raw file; **Refresh** reloads. With the log off and nothing recorded, it says where to turn it on. The point is troubleshooting: if something goes wrong, users can see exactly what ran.
 
 **Delete dialog:** says plainly that only the alias is deleted and that the program it points to stays on the computer, unchanged. Cancel has the focus, so Enter never deletes by accident.
 

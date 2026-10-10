@@ -869,24 +869,40 @@ def show_list(commands):
           "The full Database is in the Alias Maker window (☰ → Database).")
 
 
-def show_history(settings):
+def read_log():
+    """Every logged command, oldest first: dicts with when, phrase, command, code, worked."""
     path = log_path()
-    if settings.get("logging") is not True:
-        print("Logging is off, so there's no history. Turn it on with: doit logging on")
-        if not path.is_file():
-            return 0
     if not path.is_file():
-        print("Nothing logged yet.")
-        return 0
-    lines = path.read_text(encoding="utf-8").splitlines()[-20:]
-    print("Last commands I ran (newest at the bottom):\n")
-    for line in lines:
+        return []
+    entries = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         parts = line.split("\t")
         if len(parts) != 4:
             continue
         stamp, phrase, command, code = parts
-        result = "worked" if code == "0" else f"failed (code {code})"
-        print(f"  {stamp}  \"{phrase}\"  ->  {command}  [{result}]")
+        entries.append({"when": stamp, "phrase": phrase, "command": command, "code": code,
+                        "worked": code == "0"})
+    return entries
+
+
+def log_result(entry):
+    return "Worked" if entry["worked"] else f"Failed (code {entry['code']})"
+
+
+def show_history(settings):
+    entries = read_log()
+    if settings.get("logging") is not True:
+        print("Logging is off, so there's no history. Turn it on with: doit logging on "
+              "(or in the Alias Maker window: ☰ → Terminal Settings)")
+        if not entries:
+            return 0
+    if not entries:
+        print("Nothing logged yet.")
+        return 0
+    print("Last commands I ran (newest at the bottom):\n")
+    for entry in entries[-20:]:
+        print(f"  {entry['when']}  \"{entry['phrase']}\"  ->  {entry['command']}  "
+              f"[{log_result(entry).lower()}]")
     return 0
 
 
