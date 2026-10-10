@@ -78,21 +78,33 @@ Open **Alias Maker** from your app launcher (or type `aliasmaker`). To make it y
 
 ## Inside the terminal
 
-Everything you type normally still works. `doit` adds plain-English commands:
+Everything you type normally still works. `doit` runs the commands **you** make. It comes with a few built-in words so it knows how to help:
 
 | Type | What happens |
 |---|---|
 | `doit` | Asks "Do what? I am waiting..." and waits for you |
-| `doit turn off` | Shuts down (no question asked) |
-| `doit install brave` | Points to the Brave browser installation command in the Brave browser guide and installs Brave easily |
-| `doit <your phrase>` | Runs one of your custom commands |
+| `doit <your phrase>` | Runs one of your commands |
 | `doit create` | Creates a command from the terminal, step by step (same as Create Command in the menu) |
 | `doit forget <phrase>` or `doit delete <phrase>` | Deletes one of your commands, e.g. `doit forget just check my fucking drives`. Only your alias is deleted, never the real command |
-| `doit list` | The easy commands |
+| `/clippy <topic>` | Looks a topic up instead of running it |
+| `doit help` | What doit understands, plus the example commands |
 | `doit show me what you did` | Your command history, if logging is on (the full log is in ☰ → Terminal Settings) |
 | `doit logging on` / `off` | Turn the command log on or off |
 | `doit answer strict` | Saying yes needs the full word "yes" (`doit answer easy` goes back to y/yes) |
 | `doit answer word <word>` | Pick your own yes word |
+
+### Example commands you can make
+
+Alias Maker doesn't come with ready-made commands. These are examples to get you started: pick one in **Create Command** (or `doit create`), name it whatever you like, and save it.
+
+| Example phrase | What it would run | What it does |
+|---|---|---|
+| `doit turn off` | `systemctl poweroff` | Shuts the computer down |
+| `doit restart` | `systemctl reboot` | Restarts the computer |
+| `doit disk space` | `df -h` | Shows how full each drive is |
+| `doit update my system` | refreshes the signing keys, then updates everything | Updates your whole system (asks first) |
+| `doit take a snapshot` | `snapper create` | Saves a restore point (asks first) |
+| `doit install brave` | the installation command from Brave's own guide | Points to the Brave browser installation command in the Brave browser guide and installs Brave easily. Shows where the installer comes from and asks first |
 
 `doit create` and `doit forget` are for anyone who'd rather get used to the terminal than use the menu. Browsing and searching the Database, and editing commands, happen in the window (☰ → Database, ☰ → Custom Commands).
 

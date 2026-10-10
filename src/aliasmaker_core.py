@@ -10,7 +10,7 @@ Type doit, then what you want:
   /clippy chrooting     look a topic up (in the Alias Maker window; or: doit clippy ...)
   doit create           make your own phrase for any command
   doit forget <phrase>  delete one of your phrases (only the alias, never the real command)
-  doit list             the easy commands
+  doit help             what doit understands, and example commands to make
   doit --dry-run ...    show what would run, without running anything
 """
 
@@ -89,18 +89,18 @@ def migrate_old_dirs():
                 pass
 
 
-def find_index():
-    """Look for the easy-command index: env override, next to this script, then installed copies."""
+def find_examples():
+    """Look for the example commands: env override, next to this script, then installed copies."""
     candidates = []
-    if os.environ.get("DOIT_COMMANDS"):
-        candidates.append(Path(os.environ["DOIT_COMMANDS"]))
-    candidates.append(Path(__file__).resolve().parent.parent / "data" / "commands.json")
-    candidates.append(data_dir() / "commands.json")
-    candidates.append(Path("/usr/share/alias-maker/commands.json"))
+    if os.environ.get("DOIT_EXAMPLES"):
+        candidates.append(Path(os.environ["DOIT_EXAMPLES"]))
+    candidates.append(Path(__file__).resolve().parent.parent / "data" / "examples.json")
+    candidates.append(data_dir() / "examples.json")
+    candidates.append(Path("/usr/share/alias-maker/examples.json"))
     for path in candidates:
         if path.is_file():
             return path
-    raise FileNotFoundError(f"Couldn't find commands.json. Is {APP} installed correctly?")
+    return None
 
 
 def log_path():
@@ -198,19 +198,17 @@ def write_json(path, data):
     tmp.replace(path)
 
 
-def load_index(path):
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    phrase_map = {}
-    for entry in data["commands"]:
-        for phrase in entry["phrases"]:
-            key = normalize(phrase)
-            if key in phrase_map:
-                print(f"Note: \"{phrase}\" is listed twice in commands.json; "
-                      f"using {phrase_map[key]['id']}.", file=sys.stderr)
-                continue
-            phrase_map[key] = entry
-    return data["commands"], phrase_map
+def load_examples(path=None):
+    """Example commands a user can make. Nothing runs from these on its own."""
+    path = path or find_examples()
+    if path is None:
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f).get("examples", [])
+    except (OSError, ValueError):
+        print(f"Note: {APP}'s example commands couldn't be read.", file=sys.stderr)
+        return []
 
 
 def load_settings():
@@ -231,12 +229,28 @@ def save_custom(custom):
     write_json(custom_path(), {"version": 1, "commands": custom})
 
 
-def save_custom_command(phrase, command, confirm):
-    """Save one custom command, replacing any existing one with the same phrase."""
+# Notes a command can carry when it was made from an example (e.g. Brave's installer link).
+EXAMPLE_NOTES = ("explanation", "source_url", "warning")
+
+
+def example_notes(example):
+    """The notes worth keeping from an example, if it has any."""
+    if not example:
+        return {}
+    return {key: example[key] for key in EXAMPLE_NOTES if example.get(key)}
+
+
+def save_custom_command(phrase, command, confirm, notes=None):
+    """Save one custom command, replacing any existing one with the same phrase.
+
+    notes: explanation / source_url / warning carried over from an example.
+    """
     norm = normalize(phrase)
     custom = [c for c in load_custom() if normalize(c["phrase"]) != norm]
-    custom.append({"phrase": phrase.strip(), "command": command.strip(), "confirm": bool(confirm),
-                   "added": datetime.now().isoformat(timespec="seconds")})
+    entry = {"phrase": phrase.strip(), "command": command.strip(), "confirm": bool(confirm),
+             "added": datetime.now().isoformat(timespec="seconds")}
+    entry.update(notes or {})
+    custom.append(entry)
     save_custom(custom)
     return custom
 
@@ -253,6 +267,8 @@ def update_custom_command(old_phrase, phrase, command, confirm):
     index = next((i for i, c in enumerate(custom) if normalize(c["phrase"]) == old), None)
     entry = {"phrase": phrase.strip(), "command": command.strip(), "confirm": bool(confirm),
              "added": custom[index].get("added", now) if index is not None else now, "edited": now}
+    if index is not None and custom[index]["command"] == entry["command"]:
+        entry.update(example_notes(custom[index]))  # same command: its notes still apply
     if index is None:
         custom.append(entry)
     else:
@@ -283,11 +299,11 @@ def target_program(command):
     return words[0] if words else command
 
 
-def phrase_problem(norm, custom_map, phrase_map):
+def phrase_problem(norm, custom_map):
     """Why a phrase can't simply be used. Returns (problem, detail); problem is None if it's free.
 
-    "empty" and "reserved" are hard stops. "custom-clash" and "easy-clash" mean the
-    phrase is taken and the user must agree to replace it; detail is the command it runs now.
+    "empty" and "reserved" are hard stops. "custom-clash" means the user already uses the
+    phrase and must agree to replace it; detail is the command it runs now.
     """
     if not norm:
         return "empty", None
@@ -295,8 +311,6 @@ def phrase_problem(norm, custom_map, phrase_map):
         return "reserved", None
     if norm in custom_map:
         return "custom-clash", custom_map[norm]["command"]
-    if norm in phrase_map:
-        return "easy-clash", phrase_map[norm]["command"]
     return None, None
 
 
@@ -486,16 +500,6 @@ def search_library(programs, query, limit=20):
         scored.append((score, len(name), name, program))
     scored.sort(key=lambda item: item[:3])
     return len(scored), [item[3] for item in scored[:limit]]
-
-
-def search_easy(commands, query):
-    words = [w for w in query.lower().split() if w]
-    found = []
-    for entry in commands:
-        haystack = " ".join(entry["phrases"] + [entry["explanation"], entry["command"]]).lower()
-        if words and all(any(form in haystack for form in expand_word(w)) for w in words):
-            found.append(entry)
-    return found
 
 
 # ---------- /clippy: look things up instead of running them ----------
@@ -731,9 +735,8 @@ def read_manual_page(name):
 # ---------- the session ----------
 
 class State:
-    def __init__(self, commands, phrase_map, settings, dry_run):
-        self.commands = commands
-        self.phrase_map = phrase_map
+    def __init__(self, examples, settings, dry_run):
+        self.examples = examples
         self.settings = settings
         self.dry_run = dry_run
         self.custom = load_custom()
@@ -766,16 +769,15 @@ class State:
 def custom_entry(custom, state):
     """Turn a saved custom command into something the runner understands."""
     explanation = "Your own command."
-    words = custom["command"].split()
-    if words and words[0] == "sudo":
-        words = words[1:]
-    if words:
-        program = state.program(words[0])
+    if custom.get("explanation"):
+        explanation = f"Your own command. {custom['explanation']}"
+    else:
+        program = state.program(target_program(custom["command"]))
         if program and program["description"]:
             explanation = f"Your own command. ({program['name']}: {program['description']})"
     return {"id": "custom", "category": "custom", "command": custom["command"],
             "explanation": explanation, "confirm": custom.get("confirm", False),
-            "source_url": None, "warning": None}
+            "source_url": custom.get("source_url"), "warning": custom.get("warning")}
 
 
 # ---------- built-in words ----------
@@ -785,8 +787,8 @@ def match_builtin(norm):
     words = norm.split()
     if not words:
         return None
-    if norm in ("list", "help", "what can you do", "what do you know"):
-        return ("list", None)
+    if norm in ("help", "list", "what can you do", "what do you know", "examples"):
+        return ("help", None)
     if norm in ("history", "show me what you did", "what did you do"):
         return ("history", None)
     if norm in ("create", "create a command", "create command", "make a command", "new command"):
@@ -807,8 +809,8 @@ def match_builtin(norm):
 
 
 def run_builtin(name, arg, state):
-    if name == "list":
-        show_list(state.commands)
+    if name == "help":
+        show_help(state.examples)
         return 0
     if name == "history":
         return show_history(state.settings)
@@ -853,20 +855,25 @@ def set_yes_words(settings, words):
     print(f"To say yes, you'll now type: {yes_hint(settings)}")
 
 
-def show_list(commands):
-    print("Here are the easy commands. Type: doit <phrase>\n")
-    by_category = {}
-    for entry in commands:
-        by_category.setdefault(entry["category"], []).append(entry)
-    for category, entries in by_category.items():
-        print(f"{category}:")
-        for entry in entries:
-            phrases = ", ".join(f'"{p}"' for p in entry["phrases"])
-            print(f"  {phrases}")
-            print(f"      {entry['explanation']}")
-        print()
-    print("More: doit create, doit forget <phrase>, /clippy <topic>. "
-          "The full Database is in the Alias Maker window (☰ → Database).")
+def show_help(examples):
+    print("doit runs the commands you make. Type: doit <your phrase>\n")
+    print("Built in:")
+    for words, what in (
+            ("doit", "asks \"Do what? I am waiting...\" and waits for you"),
+            ("doit create", "make your own command, step by step"),
+            ("doit forget <phrase>", "delete one of your commands (also: doit delete)"),
+            ("/clippy <topic>", "look a topic up instead of running it (also: doit clippy)"),
+            ("doit show me what you did", "your command history, if the log is on"),
+            ("doit logging on / off", "turn the command log on or off"),
+            ("doit answer easy / strict", "say yes with y or yes, or only with yes"),
+            ("doit answer word <word>", "pick your own yes word"),
+            ("doit help", "this list")):
+        print(f"  {words:<28} {what}")
+    if examples:
+        print("\nExamples you could make (with doit create, or Create Command in the menu):")
+        for example in examples:
+            print(f"  doit {example['phrase']:<23} -> {example['command']}")
+    print("\nYour own commands are listed in the Alias Maker window: ☰ → Custom Commands.")
 
 
 def read_log():
@@ -907,13 +914,7 @@ def show_history(settings):
 
 
 def print_results(state, query):
-    """Print search results for both tiers. Returns the list of programs shown (numbered)."""
-    easy = search_easy(state.commands, query)
-    if easy:
-        print("Easy commands:")
-        for entry in easy:
-            print(f"  doit {entry['phrases'][0]}  ->  {entry['explanation']}")
-        print()
+    """Print matching programs on this PC. Returns the list shown (numbered)."""
     library = state.library()
     if not library or not library.get("programs"):
         print(EMPTY_DATABASE)
@@ -935,7 +936,7 @@ def print_results(state, query):
 
 def check_phrase(state, phrase):
     """True if the phrase can be used, after warning about clashes and asking when needed."""
-    problem, detail = phrase_problem(normalize(phrase), state.custom_map, state.phrase_map)
+    problem, detail = phrase_problem(normalize(phrase), state.custom_map)
     if problem == "empty":
         print("That's empty. Type the words you want to use.")
         return False
@@ -945,11 +946,6 @@ def check_phrase(state, phrase):
     if problem == "custom-clash":
         print(f"You already use \"{phrase}\" for: {detail}")
         answer = ask_or_leave(f"Replace it? (type {yes_hint(state.settings)} for yes) ")
-        return is_yes(answer, state.settings)
-    if problem == "easy-clash":
-        print(f"\"{phrase}\" is already an easy command (it runs: {detail}).")
-        answer = ask_or_leave(f"Use it for yours instead? Yours will win. "
-                              f"(type {yes_hint(state.settings)} for yes) ")
         return is_yes(answer, state.settings)
     return True
 
@@ -968,20 +964,21 @@ def pick_program(state):
             return shown[number - 1]["name"]
 
 
-def pick_easy(state):
-    for number, entry in enumerate(state.commands, 1):
-        print(f"  {number:>2}) {entry['phrases'][0]}  ->  {entry['command']}")
-    number = choose(len(state.commands))
-    return state.commands[number - 1] if number else None
+def pick_example(state):
+    for number, example in enumerate(state.examples, 1):
+        print(f"  {number:>2}) {example['phrase']}  ->  {example['command']}")
+    number = choose(len(state.examples))
+    return state.examples[number - 1] if number else None
 
 
 def add_custom(state, command=None, program=None):
     """Walk the user through making their own phrase for a command."""
     print("\nLet's make your own command.")
+    example = None
     if command is None and program is None:
         print("\nWhat should it run?")
         print("  1) Search the programs on this PC")
-        print("  2) Pick one of the easy commands")
+        print("  2) Start from an example")
         print("  3) Type the command myself")
         how = choose(3)
         if how == 0:
@@ -991,10 +988,12 @@ def add_custom(state, command=None, program=None):
             if not program:
                 return 0
         elif how == 2:
-            entry = pick_easy(state)
-            if not entry:
+            example = pick_example(state)
+            if not example:
                 return 0
-            command = entry["command"]
+            command = example["command"]
+            if example.get("explanation"):
+                print(example["explanation"])
         else:
             command = ask_or_leave("Type the command exactly: ").strip()
             if not command:
@@ -1006,13 +1005,19 @@ def add_custom(state, command=None, program=None):
     print(f"\nIt will run: {command}")
 
     while True:
-        phrase = ask_or_leave("What do you want to type for it, after 'doit'? ").strip()
+        hint = f" (Enter for \"{example['phrase']}\")" if example else ""
+        phrase = ask_or_leave(f"What do you want to type for it, after 'doit'?{hint} ").strip()
+        if not phrase and example:
+            phrase = example["phrase"]
         if check_phrase(state, phrase):
             break
 
     if "sudo" in command.split():
         confirm = True
         print("It needs admin rights (sudo), so I'll always ask before running it.")
+    elif example and example.get("confirm"):
+        confirm = True
+        print("I'll ask before running it, like the example does.")
     else:
         answer = ask_or_leave(f"Ask before running it every time? "
                               f"(type {yes_hint(state.settings)} for yes, anything else for no) ")
@@ -1023,7 +1028,7 @@ def add_custom(state, command=None, program=None):
     if not is_yes(answer, state.settings):
         print("Okay, not saved.")
         return 1
-    state.custom = save_custom_command(phrase, command, confirm)
+    state.custom = save_custom_command(phrase, command, confirm, example_notes(example))
     print(f"Saved. Now \"doit {phrase}\" runs: {command}")
     return 0
 
@@ -1080,8 +1085,6 @@ def run_entry(entry, phrase, state):
     write_log(state.settings, phrase, entry["command"], code)
     if code != 0:
         print(f"\nThat didn't work (exit code {code}).")
-    elif entry.get("category", "").startswith("install") and library_path().is_file():
-        state._library = scan_library()  # new software: refresh the list quietly
     return code
 
 
@@ -1100,18 +1103,16 @@ def handle(text, state):
     if builtin:
         return run_builtin(*builtin, state)
     custom = state.custom_map.get(norm)
-    entry = custom_entry(custom, state) if custom else state.phrase_map.get(norm)
-    if entry is None:
+    if custom is None:
         print(f"I don't know how to \"{text.strip()}\" yet.")
-        known = list(state.custom_map) + list(state.phrase_map)
-        guesses = difflib.get_close_matches(norm, known, n=3, cutoff=0.6)
+        guesses = difflib.get_close_matches(norm, list(state.custom_map), n=3, cutoff=0.6)
         if guesses:
             print("Did you mean: " + ", ".join(f'"{g}"' for g in guesses) + "?")
         else:
-            print("Type 'doit list' to see the easy commands, or open the Database in the "
-                  "Alias Maker window (☰ → Database).")
+            print("Make it a command with: doit create (or Create Command in the menu). "
+                  "Type 'doit help' to see what doit understands.")
         return None
-    return run_entry_flow(entry, norm, state)
+    return run_entry_flow(custom_entry(custom, state), norm, state)
 
 
 def main(argv):
@@ -1125,12 +1126,7 @@ def main(argv):
         return 0
 
     migrate_old_dirs()
-    try:
-        commands, phrase_map = load_index(find_index())
-    except (OSError, ValueError, KeyError) as err:
-        print(f"{APP} couldn't load its command list: {err}", file=sys.stderr)
-        return 2
-    state = State(commands, phrase_map, load_settings(), dry_run)
+    state = State(load_examples(), load_settings(), dry_run)
 
     if args:
         code = handle(" ".join(args), state)

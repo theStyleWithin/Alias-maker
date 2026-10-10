@@ -1,69 +1,57 @@
 {
-  "_note": "Seed index. Draft entries: verify each against the book before relying on it.",
-  "version": "0.2",
-  "commands": [
+  "_note": "Example commands a user can make. None of these run on their own: they're starting points offered in Create Command and doit create. Verify each against the book before relying on it.",
+  "version": "1.0",
+  "examples": [
     {
       "id": "poweroff",
-      "category": "power",
-      "phrases": ["turn off", "shut down", "pc turn off", "computer turn off"],
+      "phrase": "turn off",
       "command": "systemctl poweroff",
       "explanation": "Shuts the computer down.",
-      "needs_root": false,
       "confirm": false,
       "source_url": null,
       "warning": null
     },
     {
       "id": "reboot",
-      "category": "power",
-      "phrases": ["restart", "reboot", "pc restart", "computer restart"],
+      "phrase": "restart",
       "command": "systemctl reboot",
       "explanation": "Restarts the computer.",
-      "needs_root": false,
       "confirm": false,
       "source_url": null,
       "warning": null
     },
     {
       "id": "disk-space",
-      "category": "system-info",
-      "phrases": ["how much space is left", "disk space", "show disk space"],
+      "phrase": "disk space",
       "command": "df -h",
       "explanation": "Shows how full each drive is, in sizes that are easy to read.",
-      "needs_root": false,
       "confirm": false,
       "source_url": null,
       "warning": null
     },
     {
       "id": "update-system",
-      "category": "maintenance",
-      "phrases": ["update my system", "update", "refresh keys", "fix signature errors"],
+      "phrase": "update my system",
       "command": "sudo pacman -Sy --needed archlinux-keyring cachyos-keyring && sudo pacman -Su",
       "explanation": "Refreshes the package signing keys first, then updates everything installed. Keys go stale on a system that hasn't updated in a while, and installs fail until they're refreshed.",
-      "needs_root": true,
       "confirm": true,
       "source_url": null,
       "warning": "This updates your whole system, including the kernel. Take a snapshot first if you want an undo button."
     },
     {
       "id": "snapshot",
-      "category": "maintenance",
-      "phrases": ["take a snapshot", "save a restore point"],
-      "command": "sudo snapper create --description \"doit manual snapshot\"",
+      "phrase": "take a snapshot",
+      "command": "sudo snapper create --description \"alias maker snapshot\"",
       "explanation": "Saves a restore point you can roll back to if something breaks.",
-      "needs_root": true,
-      "confirm": false,
+      "confirm": true,
       "source_url": null,
       "warning": "Only works if snapper is set up on this computer. If it isn't, this will fail with an error about a missing config."
     },
     {
       "id": "install-brave",
-      "category": "install-third-party",
-      "phrases": ["install brave", "get brave"],
+      "phrase": "install brave",
       "command": "curl -fsS https://dl.brave.com/install.sh | sh",
-      "explanation": "Installs the Brave browser using Brave's own official installer.",
-      "needs_root": true,
+      "explanation": "Installs the Brave browser using the installation command from Brave's own guide.",
       "confirm": true,
       "source_url": "https://dl.brave.com/install.sh",
       "warning": "If Brave isn't in your regular repos, Brave's installer uses an AUR helper (paru, pikaur or yay) and installs from the AUR without asking again. It also refreshes your package list."

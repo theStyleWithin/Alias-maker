@@ -8,8 +8,8 @@ Alias Maker is its own terminal app (`aliasmaker`): a window like Konsole that r
 |---|---|
 | `src/aliasmaker` | The terminal window: GTK 4 with the VTE terminal widget (the engine many Linux terminals use). Needs `vte4` and `python-gobject`. |
 | `src/doit` | The command typed inside the terminal. A thin launcher for the engine. |
-| `src/aliasmaker_core.py` | The shared engine: easy commands, custom commands, the scan, search, logging and settings. Both of the above use it, so a phrase saved in the window works with `doit` straight away. |
-| `data/commands.json` | The easy commands. |
+| `src/aliasmaker_core.py` | The shared engine: custom commands, examples, the scan, search, /clippy, logging and settings. Both of the above use it, so a phrase saved in the window works with `doit` straight away. |
+| `data/examples.json` | Example commands users can start from. None of them run on their own. |
 | `src/shell/lets-do-stuff.fish` | Inside the window: fish's title and prompt say Let'sdostuff~, and `/clippy` is caught and sent to Alias Maker. |
 
 The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias Maker even if it isn't installed anywhere else. It was split out of [Doit-os](https://github.com/theStyleWithin/Doit-os) so the tool can be built and proven on a regular CachyOS install first. If it's stable there, it becomes Do It OS's selling point; if the distro never ships, this tool still stands on its own.
@@ -19,6 +19,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Part | Status |
 |---|---|
 | Wrapper: plain-English phrases run real commands | Built (`src/doit`) |
+| Six ready-made commands turned into examples (no built-in phrases) | Built |
 | "Do what? I am waiting..." prompt | Built |
 | Third-party install flow (show source URL, ask first) | Built |
 | Command logging (asked once, toggle later, history) | Built |
@@ -41,11 +42,11 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 59 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (106 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 60 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (112 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
 
 ## Wrapper
 
-- Typed with the `doit` prefix: `doit turn off`. Typing `doit` alone doesn't run anything, since the computer doesn't know what you want yet. It asks "Do what? I am waiting..." and keeps waiting (blank lines and unknown phrases ask again; "never mind" or Ctrl-D leaves).
+- Typed with the `doit` prefix: `doit <your phrase>`. Alias Maker ships with no ready-made phrases; `doit` runs only the commands the user made, plus its own built-in words (`create`, `forget`/`delete`, `help`, `clippy`, `logging`, `answer`, `show me what you did`). Typing `doit` alone doesn't run anything, since the computer doesn't know what you want yet. It asks "Do what? I am waiting..." and keeps waiting (blank lines and unknown phrases ask again; "never mind" or Ctrl-D leaves).
 - Matches exact phrases from the command index. Casual typing is tolerated: capitals, extra spaces, trailing `!`/`?`, and a "please".
 - Unknown phrases get "Did you mean" suggestions but never run on a guess.
 - Always shows the real command before running it.
@@ -130,7 +131,7 @@ With no search, the Database is listed A to Z; with a search, best matches come 
 
 **Opening and filling.** The Database and the Custom Command List each open in their own window (not pinned on top of the terminal). Every time one opens, its table builds up gradually: rows arrive in steps over about 1.2 seconds whatever their number (a short list appears one row at a time, about 90 ms apart; ~2,000 programs arrive in about 40 batches), with "Loading 1,200 of 1,863…" under the table. Searches and edits update instantly. If the desktop's animations are turned off, rows appear at once.
 
-**Only Custom Commands can be edited.** The Database is read-only: its cells are plain labels. In the Custom Command List, the "You type" and "It runs" cells are text cells: click one and type, then Enter or clicking away saves and Esc undoes. "Asks first" is a checkbox. Each change follows the same rules as the Edit dialog: empty values, Alias Maker's own words and phrases already in use are refused, with the old value put back and a message saying why; an easy-command phrase is refused in the cell (Edit… asks first instead); a `sudo` command always asks first, so typing one ticks the box and unticking it is refused. "Made on" can't be edited.
+**Only Custom Commands can be edited.** The Database is read-only: its cells are plain labels. In the Custom Command List, the "You type" and "It runs" cells are text cells: click one and type, then Enter or clicking away saves and Esc undoes. "Asks first" is a checkbox. Each change follows the same rules as the Edit dialog: empty values, Alias Maker's own words and phrases already in use are refused, with the old value put back and a message saying why; a `sudo` command always asks first, so typing one ticks the box and unticking it is refused. "Made on" can't be edited.
 
 **Custom Commands window:** a second database, in the same kind of table, that lists only the user's own commands and what they run. Buttons: **Create Command**, **Edit**, **Delete**, **Run in Terminal** (types `doit '<phrase>'` and presses Enter; the quotes keep fish and bash from treating `*`, `$` and the like specially). Opened from Edit Command or Delete Command in the menu, it shows a "pick the command you want to edit/delete" hint, and double-clicking a command does that action.
 
@@ -160,38 +161,37 @@ The first time the Alias Maker window opens (and on Rescan in the Database windo
 
 It only reads; it never runs the programs (asking each one for `--help` would mean launching thousands of programs). Without manual pages installed (`sudo pacman -S man-db man-pages`), descriptions come only from packages and are vaguer. The list is saved to `~/.local/share/alias-maker/library.json` and refreshed after Alias Maker's own installs.
 
-**Search** matches every word against names, descriptions and package names. Exact name matches come first. It understands plurals and a small set of plain words: for example "drives" also searches for disk, block and partition, so `lsblk` ("list block devices") turns up. Easy commands that match are shown above the programs.
+**Search** matches every word against names, descriptions and package names. Exact name matches come first. It understands plurals and a small set of plain words: for example "drives" also searches for disk, block and partition, so `lsblk` ("list block devices") turns up.
 
 ## Custom commands
 
 The user picks their own phrase for any command, including profane or silly ones, with no content restrictions. `doit <their phrase>` then runs the real command, still showing it first.
 
-- Made from the window's Custom Commands or Database, or with `doit create` in the terminal. The command can come from a search of this PC (with options added, like `lsblk` + `-f`), from the easy commands, or typed by hand.
+- Made from the window's Custom Commands or Database, or with `doit create` in the terminal. The command can come from a search of this PC (with options added, like `lsblk` + `-f`), from an example, or typed by hand.
 - Saved in `~/.config/alias-maker/custom.json`, separate from the shipped index, so an index update never wipes them.
 - Saved as phrases inside Alias Maker, not as symlinks: a symlink can't carry options like `-f`, and a phrase with spaces can't be a single command name. Symlinks stay for one-word renames of a program (not built yet).
 - Alias Maker's own words (`menu`, `list`, `search ...`, `forget ...` and so on) are reserved.
-- Clashes ask first: reusing one of your phrases asks to replace it; reusing an easy-command phrase asks, and yours wins if you say yes.
+- Clashes ask first: reusing one of your phrases asks to replace it.
 - Commands using `sudo` always ask before running; others ask only if the user chose that.
 - A command can have several phrases. The window's Custom Commands lists them; `doit forget <phrase>` or `doit delete <phrase>` removes one from the terminal.
 - Still to do: check custom phrases in the fish shell (special characters like `!` and `$` in a phrase), and export/share phrase packs.
 
-## Command index
+## Example commands
 
-`data/commands.json` holds the easy commands: the hand-written, plain-English tier shown above the scanned programs. It's shared with a future help app and the companion book. Each entry has:
+Alias Maker ships with no ready-made commands: `doit turn off` does nothing until the user makes it. `data/examples.json` holds examples instead, offered as starting points in the Create Command window ("Start from an example" dropdown) and in `doit create`, and listed by `doit help` and the README:
 
-| Field | Meaning |
+| Example | Command |
 |---|---|
-| `id` | stable identifier |
-| `category` | grouping for browsing |
-| `phrases` | default plain-English triggers |
-| `command` | the real command that runs |
-| `explanation` | plain-English description |
-| `needs_root` | whether it needs elevated rights |
-| `confirm` | whether to ask before running |
-| `source_url` | for third-party installers, the vendor URL shown before running |
-| `warning` | optional plain-English caution shown before running |
+| turn off | `systemctl poweroff` |
+| restart | `systemctl reboot` |
+| disk space | `df -h` |
+| update my system | `sudo pacman -Sy --needed archlinux-keyring cachyos-keyring && sudo pacman -Su` |
+| take a snapshot | `sudo snapper create --description "alias maker snapshot"` |
+| install brave | `curl -fsS https://dl.brave.com/install.sh \| sh` |
 
-The seed entries are drafts. Verify each against the book before relying on it.
+Picking one fills in the phrase, the command and "Ask before running it"; the user can rename it or change anything. Each example has `id`, `phrase`, `command`, `explanation`, `confirm`, and optionally `source_url` and `warning`. A command made from an example keeps the example's explanation, source link and warning (so the Brave installer's address and AUR warning are still shown before it runs) as long as its command stays the same; changing the command drops them. Example phrases aren't reserved: they're free for the user to take.
+
+The examples are drafts. Verify each against the book before relying on it.
 
 ## Open questions
 

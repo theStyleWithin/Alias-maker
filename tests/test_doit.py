@@ -14,17 +14,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 import aliasmaker_core as doit  # noqa: E402  (the engine behind doit and the window)
 
-TEST_INDEX = {
-    "commands": [
-        {"id": "ok", "category": "test", "phrases": ["do the thing", "thing"],
-         "command": "true", "explanation": "Does a harmless thing.",
-         "needs_root": False, "confirm": False, "source_url": None, "warning": None},
-        {"id": "fail", "category": "test", "phrases": ["break it"],
-         "command": "exit 3", "explanation": "Fails on purpose.",
-         "needs_root": False, "confirm": False, "source_url": None, "warning": None},
-        {"id": "careful", "category": "test", "phrases": ["install thing"],
-         "command": "true", "explanation": "Needs a yes.",
-         "needs_root": True, "confirm": True,
+TEST_EXAMPLES = {
+    "examples": [
+        {"id": "one", "phrase": "example one", "command": "true",
+         "explanation": "A harmless example.", "confirm": False, "source_url": None, "warning": None},
+        {"id": "two", "phrase": "example two", "command": "exit 3",
+         "explanation": "Fails on purpose.", "confirm": False, "source_url": None, "warning": None},
+        {"id": "installer", "phrase": "install thing", "command": "true",
+         "explanation": "Installs a thing with its vendor's installer.", "confirm": True,
          "source_url": "https://example.com/install.sh", "warning": "Be careful."},
     ]
 }
@@ -35,13 +32,13 @@ class DoitTestCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         home = Path(self.tmp.name).resolve()
         self.home = home
-        index = home / "commands.json"
-        index.write_text(json.dumps(TEST_INDEX))
+        examples = home / "examples.json"
+        examples.write_text(json.dumps(TEST_EXAMPLES))
         self.programs = home / "programs"
         self.programs.mkdir()
         self.env = mock.patch.dict(os.environ, {
             "HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
-            "XDG_DATA_HOME": str(home / "data"), "DOIT_COMMANDS": str(index),
+            "XDG_DATA_HOME": str(home / "data"), "DOIT_EXAMPLES": str(examples),
             "NO_COLOR": "1", "PATH": str(self.programs),
         })
         self.env.start()
@@ -77,6 +74,18 @@ class DoitTestCase(unittest.TestCase):
         return path.read_text().splitlines() if path.is_file() else []
 
 
+class PhraseTestCase(DoitTestCase):
+    """Starts with a few commands the user has made (doit ships with none)."""
+
+    def setUp(self):
+        super().setUp()
+        doit.save_custom_command("do the thing", "true", False)
+        doit.save_custom_command("thing", "true", False)
+        doit.save_custom_command("break it", "exit 3", False)
+        doit.save_custom_command("install thing", "true", True,
+                                 doit.example_notes(TEST_EXAMPLES["examples"][2]))
+
+
 class TestNormalize(DoitTestCase):
     def test_cleans_up_casual_typing(self):
         self.assertEqual(doit.normalize("  PC   Turn OFF!  "), "pc turn off")
@@ -85,7 +94,7 @@ class TestNormalize(DoitTestCase):
         self.assertEqual(doit.normalize("?!."), "")
 
 
-class TestBarePrompt(DoitTestCase):
+class TestBarePrompt(PhraseTestCase):
     def test_doit_alone_asks_do_what(self):
         code, out, prompts = self.run_doit([], answers=["do the thing", "no"])
         self.assertEqual(code, 0)
@@ -113,7 +122,7 @@ class TestBarePrompt(DoitTestCase):
         self.assertEqual(prompts, [])
 
 
-class TestPhrases(DoitTestCase):
+class TestPhrases(PhraseTestCase):
     def test_runs_matching_phrase_and_shows_real_command(self):
         code, out, _ = self.run_doit(["Do", "the", "thing!"], answers=["no"])
         self.assertEqual(code, 0)
@@ -135,13 +144,14 @@ class TestPhrases(DoitTestCase):
         self.assertIn("[dry run] Would run: exit 3", out)
 
 
-class TestConfirmation(DoitTestCase):
+class TestConfirmation(PhraseTestCase):
     def test_installer_shows_source_and_warning_and_asks(self):
         code, out, prompts = self.run_doit(["install thing"], answers=["no", "y"])
         self.assertEqual(code, 0)
         self.assertIn("https://example.com/install.sh", out)
         self.assertIn("official installer", out)
         self.assertIn("Heads up: Be careful.", out)
+        self.assertIn("Installs a thing with its vendor's installer.", out)
         self.assertTrue(prompts[-1].startswith("Go ahead?"))
 
     def test_saying_no_cancels(self):
@@ -168,7 +178,7 @@ class TestConfirmation(DoitTestCase):
         self.assertEqual(prompts, [])
 
 
-class TestLogging(DoitTestCase):
+class TestLogging(PhraseTestCase):
     def test_first_run_asks_once_and_logs_when_yes(self):
         code, out, prompts = self.run_doit(["thing"], answers=["yes"])
         self.assertEqual(code, 0)
@@ -204,19 +214,34 @@ class TestLogging(DoitTestCase):
         self.assertEqual(self.log_lines(), [])
 
 
-class TestRealIndex(DoitTestCase):
-    def test_shipped_index_loads_without_duplicate_phrases(self):
-        index = ROOT / "data" / "commands.json"
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            commands, phrase_map = doit.load_index(index)
-        self.assertEqual(err.getvalue(), "")
-        required = {"id", "category", "phrases", "command", "explanation",
-                    "needs_root", "confirm", "source_url", "warning"}
-        for entry in commands:
-            self.assertTrue(required <= set(entry), entry["id"])
-            if entry["source_url"]:
-                self.assertTrue(entry["confirm"], f"{entry['id']} downloads code but doesn't ask")
+class TestShippedExamples(DoitTestCase):
+    def test_examples_are_complete_and_none_run_by_themselves(self):
+        examples = doit.load_examples(ROOT / "data" / "examples.json")
+        self.assertEqual([e["phrase"] for e in examples],
+                         ["turn off", "restart", "disk space", "update my system",
+                          "take a snapshot", "install brave"])
+        for example in examples:
+            self.assertTrue({"id", "phrase", "command", "explanation", "confirm"} <= set(example))
+            self.assertIsNone(doit.phrase_problem(doit.normalize(example["phrase"]), {})[0],
+                              f"{example['phrase']} should be free for the user to take")
+            if example.get("source_url") or "sudo" in example["command"].split():
+                self.assertTrue(example["confirm"], f"{example['id']} should ask first")
+
+    def test_examples_are_not_commands(self):
+        os.environ["DOIT_EXAMPLES"] = str(ROOT / "data" / "examples.json")
+        for words in (["turn", "off"], ["install", "brave"], ["disk", "space"]):
+            code, out, _ = self.run_doit(words, tty=False)
+            self.assertEqual(code, 1, words)
+            self.assertIn("doit create", out)
+
+    def test_help_lists_built_in_words_and_examples(self):
+        code, out, _ = self.run_doit(["help"], tty=False)
+        self.assertEqual(code, 0)
+        for text in ("doit create", "doit forget <phrase>", "/clippy <topic>", "Do what? I am waiting",
+                     "doit example one", "-> exit 3"):
+            self.assertIn(text, out)
+        _, out_list, _ = self.run_doit(["list"], tty=False)
+        self.assertEqual(out_list, out)
 
 
 def make_program(folder, name, body="exit 0"):
@@ -287,9 +312,6 @@ class TestScan(ScanTestCase):
         self.assertIn("The database is empty", out)
         self.assertFalse(doit.library_path().exists())
 
-    def test_easy_commands_are_searchable_too(self):
-        commands, _ = doit.load_index(Path(os.environ["DOIT_COMMANDS"]))
-        self.assertEqual([e["id"] for e in doit.search_easy(commands, "harmless")], ["ok"])
 
 
 class TestScanWithoutTools(DoitTestCase):
@@ -321,7 +343,7 @@ class TestCustomCommands(ScanTestCase):
         self.assertIn("(lsblk: list block devices)", out)
         self.assertIn("[dry run] Would run: lsblk -f", out)
 
-    def test_pick_from_easy_commands(self):
+    def test_start_from_an_example(self):
         code, _, _ = self.run_doit(["create"], answers=["2", "2", "smash", "no", "yes"])
         self.assertEqual(code, 0)
         code, _, _ = self.run_doit(["smash"], answers=["no"])
@@ -333,16 +355,25 @@ class TestCustomCommands(ScanTestCase):
         saved = json.loads(doit.custom_path().read_text())["commands"]
         self.assertEqual(saved[0]["phrase"], "my thing")
 
-    def test_overriding_an_easy_phrase_asks_and_then_wins(self):
-        self.run_doit(["create"], answers=["3", "exit 5", "thing", "yes", "no", "yes"])
-        code, _, _ = self.run_doit(["thing"], answers=["no"])
-        self.assertEqual(code, 5)
+    def test_example_phrase_is_offered_and_enter_takes_it(self):
+        _, out, prompts = self.run_doit(["create"], answers=["2", "1", "", "no", "yes"])
+        self.assertTrue(any('(Enter for "example one")' in p for p in prompts))
+        self.assertIn("A harmless example.", out)
+        self.assertEqual([c["phrase"] for c in doit.load_custom()], ["example one"])
 
-    def test_saying_no_to_override_asks_for_another_phrase(self):
-        _, out, prompts = self.run_doit(["create"], answers=["3", "exit 5", "thing", "no", "other", "no", "yes"])
-        self.assertIn("already an easy command", out)
-        saved = json.loads(doit.custom_path().read_text())["commands"]
-        self.assertEqual(saved[0]["phrase"], "other")
+    def test_example_notes_travel_with_the_command(self):
+        self.run_doit(["create"], answers=["2", "3", "get thing", "yes"])
+        saved = doit.load_custom()[0]
+        self.assertEqual((saved["source_url"], saved["warning"], saved["confirm"]),
+                         ("https://example.com/install.sh", "Be careful.", True))
+        _, out, _ = self.run_doit(["get", "thing"], answers=["no", "nah"])
+        self.assertIn("https://example.com/install.sh", out)
+        self.assertIn("Heads up: Be careful.", out)
+        doit.update_custom_command("get thing", "get it", "true", True)
+        self.assertEqual(doit.load_custom()[0]["source_url"], "https://example.com/install.sh",
+                         "renaming keeps the notes")
+        doit.update_custom_command("get it", "get it", "echo different", True)
+        self.assertNotIn("source_url", doit.load_custom()[0], "a changed command drops them")
 
     def test_replacing_my_own_phrase(self):
         self.run_doit(["create"], answers=["3", "true", "x", "no", "yes"])
@@ -408,11 +439,11 @@ class TestWindowHelpers(DoitTestCase):
     """The non-interactive helpers the Alias Maker window uses."""
 
     def test_phrase_problem(self):
-        _, phrase_map = doit.load_index(Path(os.environ["DOIT_COMMANDS"]))
         custom_map = {"mine": {"phrase": "mine", "command": "ls"}}
-        check = lambda text: doit.phrase_problem(doit.normalize(text), custom_map, phrase_map)
+        check = lambda text: doit.phrase_problem(doit.normalize(text), custom_map)
         self.assertEqual(check("  !! "), ("empty", None))
         self.assertEqual(check("list"), ("reserved", None))
+        self.assertEqual(check("help"), ("reserved", None))
         self.assertEqual(check("forget my stuff"), ("reserved", None))
         self.assertEqual(check("delete my stuff"), ("reserved", None))
         self.assertEqual(check("create"), ("reserved", None))
@@ -420,7 +451,7 @@ class TestWindowHelpers(DoitTestCase):
         self.assertEqual(check("rescan"), (None, None))
         self.assertEqual(check("never mind"), ("reserved", None))
         self.assertEqual(check("Mine!"), ("custom-clash", "ls"))
-        self.assertEqual(check("thing"), ("easy-clash", "true"))
+        self.assertEqual(check("turn off"), (None, None))  # only an example, free to use
         self.assertEqual(check("just check my fucking drives"), (None, None))
 
     def test_save_replaces_same_phrase_and_remove(self):
@@ -641,7 +672,7 @@ class TestClippy(DoitTestCase):
         self.assertIn("/clippy chrooting", out)
 
     def test_clippy_is_one_of_alias_makers_own_words(self):
-        self.assertEqual(doit.phrase_problem("clippy stuff", {}, {})[0], "reserved")
+        self.assertEqual(doit.phrase_problem("clippy stuff", {})[0], "reserved")
 
     def test_word_endings(self):
         self.assertIn("chroot", doit.expand_word("chrooting"))

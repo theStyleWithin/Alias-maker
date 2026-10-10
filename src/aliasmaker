@@ -928,7 +928,7 @@ class CustomWindow(Gtk.Window):
             own = core.normalize(custom["phrase"])
             others = {core.normalize(c["phrase"]): c for c in core.load_custom()}
             others.pop(own, None)
-            problem, detail = core.phrase_problem(norm, others, self.app.phrase_map)
+            problem, detail = core.phrase_problem(norm, others)
             if problem == "empty":
                 self.say("The phrase can't be empty, so I put the old one back.", "error")
                 return False
@@ -939,11 +939,6 @@ class CustomWindow(Gtk.Window):
             if problem == "custom-clash":
                 self.say(f"You already use \"{new_phrase}\" for: {detail}. Pick another phrase, "
                          "or delete that one first.", "error")
-                return False
-            if problem == "easy-clash":
-                self.say(f"\"{new_phrase}\" is already an easy command (it runs: {detail}). To use "
-                         "it for yours anyway, select the row and press Edit…, which asks first.",
-                         "error")
                 return False
         if command is not None and not new_command:
             self.say("The command can't be empty, so I put the old one back.", "error")
@@ -1000,9 +995,21 @@ class CommandDialog(Gtk.Window):
         self.app = app
         self.existing = existing
         self.pending = None
+        self.example = None
         self.set_default_size(520, -1)
 
         layout = padded_box(spacing=6)
+        self.examples = [] if existing or command else list(app.examples)
+        if self.examples:
+            layout.append(text_label("Start from an example (optional)"))
+            choices = ["Pick an example…"] + [f"{e['phrase']}  →  {e['command']}"
+                                              for e in self.examples]
+            self.example_picker = Gtk.DropDown.new_from_strings(choices)
+            self.example_picker.connect("notify::selected", lambda *_: self.on_example())
+            layout.append(self.example_picker)
+            self.example_note = text_label("", "dim-label")
+            self.example_note.set_visible(False)
+            layout.append(self.example_note)
         layout.append(text_label("What do you want to type? (after doit)"))
         self.phrase = Gtk.Entry()
         self.phrase.set_placeholder_text("for example: just check my drives")
@@ -1051,6 +1058,25 @@ class CommandDialog(Gtk.Window):
     def forget_pending(self):
         self.pending = None
 
+    def on_example(self):
+        """Fill the form from the chosen example. The user can still change anything."""
+        index = self.example_picker.get_selected()
+        if index == Gtk.INVALID_LIST_POSITION or index == 0:
+            self.example = None
+            self.example_note.set_visible(False)
+            return
+        example = self.examples[index - 1]
+        self.example = example
+        self.phrase.set_text(example["phrase"])
+        self.command.set_text(example["command"])
+        self.ask_first.set_active(bool(example.get("confirm")) or "sudo" in example["command"].split())
+        note = example.get("explanation", "")
+        if example.get("warning"):
+            note += f"\nHeads up: {example['warning']}"
+        self.example_note.set_label(note)
+        self.example_note.set_visible(bool(note))
+        self.phrase.grab_focus()  # name it whatever you like
+
     def on_command_changed(self):
         uses_sudo = "sudo" in self.command.get_text().split()
         if uses_sudo:
@@ -1075,27 +1101,27 @@ class CommandDialog(Gtk.Window):
         own = core.normalize(self.existing["phrase"]) if self.existing else None
         custom_map = {core.normalize(c["phrase"]): c for c in core.load_custom()}
         custom_map.pop(own, None)  # editing: the command's own phrase isn't a clash
-        problem, detail = core.phrase_problem(norm, custom_map, self.app.phrase_map)
+        problem, detail = core.phrase_problem(norm, custom_map)
         if problem == "empty":
             self.say("Type the words you want to use.", "error")
             return
         if problem == "reserved":
             self.say(f"\"{phrase}\" is one of {core.APP}'s own words. Pick something else.", "error")
             return
-        if problem and self.pending != (norm, command):
+        if problem == "custom-clash" and self.pending != (norm, command):
             self.pending = (norm, command)
-            if problem == "custom-clash":
-                self.say(f"You already use that phrase for: {detail}\nPress Save again to replace it.",
-                         "warning")
-            else:
-                self.say(f"That's already an easy command (it runs: {detail}).\n"
-                         "Press Save again to use it for yours instead.", "warning")
+            self.say(f"You already use that phrase for: {detail}\nPress Save again to replace it.",
+                     "warning")
             return
         confirm = self.ask_first.get_active() or "sudo" in command.split()
         if self.existing:
             core.update_custom_command(self.existing["phrase"], phrase, command, confirm)
         else:
-            core.save_custom_command(phrase, command, confirm)
+            # Made from an example and still running its command: keep the example's notes
+            # (like the Brave installer's link), so they're shown before it runs.
+            notes = (core.example_notes(self.example)
+                     if self.example and command == self.example["command"] else None)
+            core.save_custom_command(phrase, command, confirm, notes)
         self.close()
         self.app.custom_changed()
 
@@ -1362,10 +1388,7 @@ class AliasMakerApp(Gtk.Application):
         self.custom_window = None
         self.settings_window = None
         self.log_window = None
-        try:
-            _, self.phrase_map = core.load_index(core.find_index())
-        except (OSError, ValueError, KeyError):
-            self.phrase_map = {}
+        self.examples = core.load_examples()  # starting points for Create Command
 
     def do_activate(self):
         core.migrate_old_dirs()
