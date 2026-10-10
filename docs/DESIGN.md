@@ -2,6 +2,19 @@
 
 Alias Maker is its own terminal app (`aliasmaker`): a window like Konsole that runs the user's normal shell, with **Database**, **Custom Commands** and **Create Command** added to its ☰ menu. Inside it, you type `doit` followed by plain words and it runs the real Linux command. `doit` is only the prefix; the tool is called Alias Maker.
 
+## Goals
+
+**Now: make Linux easy for the average person.** The target is someone who has never opened a terminal and won't read instructions. Before anything else, Alias Maker has to clearly lower that bar. Planned, in order:
+
+1. **First-run welcome** in the window: instead of a blank prompt, a short "here's what you can do" with things to click.
+2. **Task first, not command first:** start Create Command with "What do you want to do?" and a list of plain tasks ("turn off my PC", "check my drives"), each backed by an example.
+3. **Plain-words pass** on every label and message (alias, phrase, "doit only" and similar mean nothing to a beginner).
+4. **More examples,** written in plain English from the companion book.
+5. **Easy install:** a package from the app store instead of `git clone` and `./install.sh`.
+6. **A real test:** watch one person with no Linux experience use it unaided, and fix where they get stuck.
+
+**Later: the default terminal in Do It OS,** shipped instead of Konsole. That will also need what people expect from a main terminal and Alias Maker doesn't have yet: tabs, split view, find, and appearance settings (font, colors). KDE's "Open Terminal Here" and similar already work through `--workdir` and `-e`, and the app-launcher entry is in the TerminalEmulator category.
+
 ## How it's built
 
 | File | What it is |
