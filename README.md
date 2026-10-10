@@ -66,7 +66,7 @@ The rest of the menu works like Konsole's: New Window, Copy, Paste, Full Screen,
 
 ## Install
 
-**The easy way: the installer.** Get the installer file, `alias-maker-<version>-installer.run` (or make it yourself, see below), then in a terminal:
+**The easy way: the installer.** Download the installer from the [packaging folder](packaging/) (open `alias-maker-<version>-installer.run` and click "Download raw file"), then in a terminal:
 
 ```
 bash ~/Downloads/alias-maker-0.6.0-installer.run
@@ -92,7 +92,7 @@ cd Alias-maker
 
 `install.sh` runs Alias Maker straight from the cloned folder, for your user only. The repo is private, so `git clone` will ask you to sign in to GitHub. Don't use both ways at once: the `install.sh` copy in `~/.local/bin` would run instead of the installed one.
 
-**Making the installer:** `packaging/build-installer.sh` builds `dist/alias-maker-<version>-installer.run` from the last commit. It carries `packaging/arch/PKGBUILD` and the source, and runs `makepkg` on the user's PC.
+**Making the installer:** `packaging/build-installer.sh` builds `alias-maker-<version>-installer.run` from the last commit, into `dist/` and the `packaging/` folder (replacing the older one there). It carries `packaging/arch/PKGBUILD` and the source, and runs `makepkg` on the user's PC.
 
 ## Inside the terminal
 
