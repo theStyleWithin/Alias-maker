@@ -33,13 +33,13 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Database: scan of every program on this PC, with search | Built |
 | Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built, untested on real hardware |
 | Konsole-style menu items and shortcuts (New Window, Copy, Paste, Full Screen, font size) | Built, untested on real hardware |
-| Text menu (`doit menu`) | Built, kept as a backup outside the window |
+| Text menu (`doit menu`) and terminal search (`doit search`) | Removed: the window's ☰ menu and Database replace them |
 | Tabs, split view, find, profiles | Not yet |
 | Plain-English explanation for every scanned program | Stretch goal |
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 66 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (92 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 58 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (92 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
 
 ## Wrapper
 
@@ -141,7 +141,7 @@ Custom commands are entries in Alias Maker's own list (`~/.config/alias-maker/cu
 
 **When the scan happens:** the first time the window opens (in the background, with "Scanning your installed software for the Database…" under the title), on Rescan, and after Alias Maker's own installs. `doit` never scans on its own; `doit rescan` scans on request.
 
-The text menu (`doit menu`) still exists as a backup for terminals other than Alias Maker.
+There's no text menu and no `doit search`: the window's ☰ menu and Database search box are the way in.
 
 ## Database: every program on this PC
 

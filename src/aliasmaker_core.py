@@ -7,8 +7,7 @@ This is the shared engine behind both the Alias Maker terminal window
 Type doit, then what you want:
   doit                  asks "Do what? I am waiting..." and waits for you
   doit turn off         runs a command by its plain-English phrase
-  doit menu             database, custom commands, settings and history
-  doit search drives    find programs on this PC by what they do
+  /clippy chrooting     look a topic up (in the Alias Maker window; or: doit clippy ...)
   doit add              make your own phrase for any command
   doit list             the easy commands
   doit --dry-run ...    show what would run, without running anything
@@ -716,7 +715,7 @@ def clippy(state, query):
         print(note)
     if not choices:
         print(f"I didn't find anything about \"{query}\". Try a different word, "
-              "or search the programs on this PC with: doit search <words>")
+              "or search the Database in the Alias Maker window (☰ → Database).")
         return 1
     if not interactive():
         return 0
@@ -801,8 +800,6 @@ def match_builtin(norm):
         return ("list", None)
     if norm in ("history", "show me what you did", "what did you do"):
         return ("history", None)
-    if norm in ("menu", "database", "settings"):
-        return ("menu", None)
     if norm in ("add", "add a command", "make a command", "new command"):
         return ("add", None)
     if norm in ("my commands", "custom commands"):
@@ -811,8 +808,6 @@ def match_builtin(norm):
         return ("rescan", None)
     if norm == "version":
         return ("version", None)
-    if words[0] == "search":
-        return ("search", " ".join(words[1:]))
     if words[0] in (HELPER_NAME, "/" + HELPER_NAME):
         return ("clippy", " ".join(words[1:]))
     if words[0] == "forget" and len(words) > 1:
@@ -851,8 +846,6 @@ def run_builtin(name, arg, state):
         return 0
     if name == "clippy":
         return clippy(state, arg)
-    if name == "search":
-        return cli_search(state, arg)
     if name == "custom":
         show_custom(state)
         return 0
@@ -860,8 +853,6 @@ def run_builtin(name, arg, state):
         print("That one needs you at a terminal to answer questions.")
         return 2
     try:
-        if name == "menu":
-            return menu_main(state)
         if name == "add":
             return add_custom(state)
         if name == "forget":
@@ -897,7 +888,8 @@ def show_list(commands):
             print(f"  {phrases}")
             print(f"      {entry['explanation']}")
         print()
-    print("More: doit menu, doit search <words>, doit add, doit my commands")
+    print("More: doit add, doit my commands, /clippy <topic>. "
+          "The full Database is in the Alias Maker window (☰ → Database).")
 
 
 def show_history(settings):
@@ -954,14 +946,6 @@ def print_results(state, query):
     if total > len(shown):
         print(f"  ...and {total - len(shown)} more. Add words to narrow it down.")
     return shown
-
-
-def cli_search(state, query):
-    if not query:
-        print("Tell me what to look for, for example: doit search drives")
-        return 1
-    print_results(state, query)
-    return 0
 
 
 # ---------- custom commands ----------
@@ -1078,145 +1062,6 @@ def forget_custom(state, phrase):
     return 0
 
 
-# ---------- the menu ----------
-
-def menu_main(state):
-    while True:
-        print(f"\n{APP} menu")
-        print("  1) Database")
-        print("  2) Settings")
-        print("  3) History")
-        number = choose(3, "Pick a number (Enter to leave): ")
-        if number == 0:
-            return 0
-        if number == 1:
-            menu_database(state)
-        elif number == 2:
-            menu_settings(state)
-        else:
-            show_history(state.settings)
-
-
-def menu_database(state):
-    while True:
-        library = state.library()
-        when = f"last scanned {library['scanned_at'].replace('T', ' at ')}" if library else "not scanned yet"
-        print("\nDatabase")
-        print("  1) Easy commands (plain English)")
-        print("  2) Every command on this PC (search)")
-        print("  3) Custom commands (yours)")
-        print(f"  4) Rescan this PC ({when})")
-        number = choose(4)
-        if number == 0:
-            return
-        if number == 1:
-            menu_easy(state)
-        elif number == 2:
-            menu_every(state)
-        elif number == 3:
-            menu_custom(state)
-        else:
-            run_builtin("rescan", None, state)
-
-
-def menu_easy(state):
-    while True:
-        print("\nEasy commands")
-        entry = pick_easy(state)
-        if not entry:
-            return
-        print(f"\n{entry['explanation']}")
-        print(f"Type any of: " + ", ".join(f'"doit {p}"' for p in entry["phrases"]))
-        print(f"Real command: {entry['command']}")
-        print("  1) Run it now")
-        print("  2) Make my own phrase for it")
-        number = choose(2)
-        if number == 1:
-            run_entry_flow(entry, normalize(entry["phrases"][0]), state)
-        elif number == 2:
-            add_custom(state, command=entry["command"])
-
-
-def menu_every(state):
-    while True:
-        print("\nEvery command on this PC")
-        name = pick_program(state)
-        if not name:
-            return
-        program = state.program(name) or {"name": name, "description": "", "package": None, "path": ""}
-        print(f"\n{program['name']}: {program['description'] or '(no description)'}")
-        if program.get("package"):
-            print(f"Comes from the package: {program['package']}")
-        print(f"Lives at: {program['path']}")
-        print("  1) Make a custom command for it")
-        print("  2) Read its manual")
-        number = choose(2)
-        if number == 1:
-            add_custom(state, program=name)
-        elif number == 2:
-            read_manual(name, state)
-
-
-def read_manual(name, state):
-    if not shutil.which("man"):
-        print("Manual pages aren't installed. Install them with: sudo pacman -S man-db man-pages")
-        return
-    if state.dry_run:
-        print(f"[dry run] Would run: man {name}")
-        return
-    if subprocess.run(["man", name]).returncode != 0:
-        print(f"{name} doesn't have a manual installed.")
-
-
-def menu_custom(state):
-    while True:
-        print("\nCustom commands")
-        print("  1) Make a new one")
-        for number, custom in enumerate(state.custom, 2):
-            print(f"  {number:>2}) doit {custom['phrase']}  ->  {custom['command']}")
-        number = choose(len(state.custom) + 1)
-        if number == 0:
-            return
-        if number == 1:
-            add_custom(state)
-            continue
-        custom = state.custom[number - 2]
-        print(f"\ndoit {custom['phrase']}  ->  {custom['command']}")
-        print("  1) Run it now")
-        print("  2) Remove it")
-        action = choose(2)
-        if action == 1:
-            run_entry_flow(custom_entry(custom, state), normalize(custom["phrase"]), state)
-        elif action == 2:
-            forget_custom(state, custom["phrase"])
-
-
-def menu_settings(state):
-    settings = state.settings
-    while True:
-        logging = {True: "on", False: "off", None: "not chosen yet"}[settings["logging"]]
-        print("\nSettings")
-        print(f"  1) Command log (now {logging}): turn {'off' if settings['logging'] else 'on'}")
-        print(f"  2) Yes answer (now {yes_hint(settings)}): 'y' or 'yes'")
-        print("  3) Yes answer: only the full word 'yes'")
-        print("  4) Yes answer: pick my own word")
-        number = choose(4)
-        if number == 0:
-            return
-        if number == 1:
-            set_logging(settings, not settings["logging"])
-        elif number == 2:
-            set_yes_words(settings, ["y", "yes"])
-        elif number == 3:
-            set_yes_words(settings, ["yes"])
-        else:
-            word = normalize(ask_or_leave("Type your yes word: "))
-            if word and " " not in word:
-                set_yes_words(settings, [word])
-            else:
-                print("Pick a single word.")
-
-
 # ---------- running a command ----------
 
 def explain_and_confirm(entry, settings):
@@ -1276,7 +1121,8 @@ def handle(text, state):
         if guesses:
             print("Did you mean: " + ", ".join(f'"{g}"' for g in guesses) + "?")
         else:
-            print("Type 'doit menu' to see everything, or 'doit search <words>' to find a program.")
+            print("Type 'doit list' to see the easy commands, or open the Database in the "
+                  "Alias Maker window (☰ → Database).")
         return None
     return run_entry_flow(entry, norm, state)
 
