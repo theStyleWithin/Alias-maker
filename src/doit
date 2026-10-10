@@ -1,53 +1,116 @@
 #!/usr/bin/env python3
-"""Do It: plain-English commands for Linux (prototype).
+"""Alias Maker: plain-English commands for Linux (prototype).
 
-Usage:
+Type doit, then what you want:
   doit                  asks "Do what? I am waiting..." and waits for you
-  doit <what you want>  e.g. doit turn off, doit install brave
-  doit list             everything Do It knows how to do
+  doit turn off         runs a command by its plain-English phrase
+  doit menu             database, custom commands, settings and history
+  doit search drives    find programs on this PC by what they do
+  doit add              make your own phrase for any command
+  doit list             the easy commands
   doit --dry-run ...    show what would run, without running anything
 """
 
 import difflib
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "0.1.0"
+APP = "Alias Maker"
+VERSION = "0.2.0"
+DIR_NAME = "alias-maker"
+OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}
 NEVER_MIND = {"nothing", "never mind", "nevermind", "cancel", "quit", "exit", "stop"}
+
+# Plain words people search with, mapped to words that show up in program descriptions.
+SYNONYMS = {
+    "drive": ["disk", "block", "partition", "storage", "filesystem", "mount"],
+    "disk": ["drive", "block", "partition", "storage", "filesystem"],
+    "storage": ["disk", "block", "partition", "filesystem"],
+    "wifi": ["wireless", "wlan", "network", "802.11"],
+    "internet": ["network", "connection", "dns", "http"],
+    "network": ["wireless", "connection", "interface"],
+    "sound": ["audio", "volume", "pulse", "pipewire", "alsa", "mixer"],
+    "audio": ["sound", "volume", "pulse", "pipewire", "alsa"],
+    "volume": ["audio", "sound", "mixer"],
+    "battery": ["power", "acpi", "upower", "charge"],
+    "power": ["battery", "acpi", "shutdown", "suspend"],
+    "file": ["files", "directory", "folder"],
+    "folder": ["directory"],
+    "picture": ["image", "photo", "screenshot"],
+    "screenshot": ["screen", "capture"],
+    "memory": ["ram", "mem", "swap"],
+    "process": ["task", "processes", "kill"],
+    "bluetooth": ["bt", "bluez"],
+    "usb": ["device"],
+    "download": ["fetch", "transfer", "url"],
+    "zip": ["archive", "compress"],
+    "time": ["date", "clock"],
+    "user": ["account", "login"],
+    "password": ["passwd", "credentials"],
+}
+
+
+class LeaveMenu(Exception):
+    """Raised when the user presses Ctrl-D inside a menu or a question."""
 
 
 # ---------- where things live ----------
 
 def config_dir():
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "doit"
+    return Path(base) / DIR_NAME
 
 
 def data_dir():
     base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    return Path(base) / "doit"
+    return Path(base) / DIR_NAME
+
+
+def migrate_old_dirs():
+    """Earlier versions stored things under 'doit'. Move them once, if present."""
+    for new in (config_dir(), data_dir()):
+        old = new.parent / OLD_DIR_NAME
+        if old.is_dir() and not new.exists():
+            try:
+                old.rename(new)
+            except OSError:
+                pass
 
 
 def find_index():
-    """Look for the command index: env override, next to this script, then installed copies."""
+    """Look for the easy-command index: env override, next to this script, then installed copies."""
     candidates = []
     if os.environ.get("DOIT_COMMANDS"):
         candidates.append(Path(os.environ["DOIT_COMMANDS"]))
     candidates.append(Path(__file__).resolve().parent.parent / "data" / "commands.json")
     candidates.append(data_dir() / "commands.json")
-    candidates.append(Path("/usr/share/doit/commands.json"))
+    candidates.append(Path("/usr/share/alias-maker/commands.json"))
     for path in candidates:
         if path.is_file():
             return path
-    raise FileNotFoundError("Couldn't find commands.json. Is Do It installed correctly?")
+    raise FileNotFoundError(f"Couldn't find commands.json. Is {APP} installed correctly?")
 
 
-# ---------- text handling ----------
+def log_path():
+    return data_dir() / "command-log.tsv"
+
+
+def library_path():
+    return data_dir() / "library.json"
+
+
+def custom_path():
+    return config_dir() / "custom.json"
+
+
+# ---------- text and questions ----------
 
 def normalize(text):
     """Lowercase, trim punctuation at the ends, squash spaces, drop a polite 'please'."""
@@ -76,11 +139,59 @@ def ask(prompt):
         return None
 
 
+def ask_or_leave(prompt):
+    """Like ask(), but Ctrl-D leaves the whole menu or question."""
+    answer = ask(prompt)
+    if answer is None:
+        raise LeaveMenu
+    return answer
+
+
+def choose(count, prompt="Pick a number (Enter to go back): "):
+    """Ask for a number 1..count. Returns the number, or 0 to go back."""
+    while True:
+        answer = ask_or_leave(prompt).strip().lower()
+        if answer in ("", "0", "b", "back"):
+            return 0
+        if answer.isdigit() and 1 <= int(answer) <= count:
+            return int(answer)
+        print(f"Type a number from 1 to {count}, or press Enter to go back.")
+
+
 def interactive():
     return sys.stdin.isatty()
 
 
-# ---------- index and settings ----------
+def is_yes(answer, settings):
+    if answer is None:
+        return False
+    return normalize(answer) in {w.lower() for w in settings["yes_words"]}
+
+
+def yes_hint(settings):
+    return " or ".join(f"'{w}'" for w in settings["yes_words"])
+
+
+# ---------- saved data ----------
+
+def read_json(path, default):
+    if not path.is_file():
+        return default
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        print(f"Note: {path.name} couldn't be read, so I'm ignoring it.", file=sys.stderr)
+        return default
+
+
+def write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    tmp.replace(path)
+
 
 def load_index(path):
     with open(path, encoding="utf-8") as f:
@@ -98,39 +209,24 @@ def load_index(path):
 
 
 def load_settings():
-    path = config_dir() / "settings.json"
     settings = dict(DEFAULT_SETTINGS)
-    if path.is_file():
-        try:
-            with open(path, encoding="utf-8") as f:
-                settings.update(json.load(f))
-        except (OSError, ValueError):
-            print("Note: settings file couldn't be read, using defaults.", file=sys.stderr)
+    settings.update(read_json(config_dir() / "settings.json", {}))
     return settings
 
 
 def save_settings(settings):
-    path = config_dir() / "settings.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=2)
+    write_json(config_dir() / "settings.json", settings)
 
 
-def is_yes(answer, settings):
-    if answer is None:
-        return False
-    return normalize(answer) in {w.lower() for w in settings["yes_words"]}
+def load_custom():
+    return read_json(custom_path(), {"commands": []}).get("commands", [])
 
 
-def yes_hint(settings):
-    return " or ".join(f"'{w}'" for w in settings["yes_words"])
+def save_custom(custom):
+    write_json(custom_path(), {"version": 1, "commands": custom})
 
 
 # ---------- logging ----------
-
-def log_path():
-    return data_dir() / "command-log.tsv"
-
 
 def first_run_logging(settings):
     """Ask once whether to keep a log. Non-interactive runs never ask and never log."""
@@ -156,10 +252,324 @@ def write_log(settings, phrase, command, code):
         f.write(f"{stamp}\t{phrase}\t{command}\t{code}\n")
 
 
-# ---------- built-in commands ----------
+# ---------- scanning this PC ----------
+
+WHATIS_LINE = re.compile(r"^(\S+) \(([^)]+)\)\s+- (.*)$")
+SECTION_RANK = {"1": 0, "8": 1, "6": 2}  # user commands, admin commands, games
+
+
+def find_programs():
+    """Every program the terminal can run, from the folders listed in PATH. Read only."""
+    programs = {}
+    visited = set()
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        if not folder or not os.path.isdir(folder):
+            continue
+        real = os.path.realpath(folder)
+        if real in visited:
+            continue
+        visited.add(real)
+        try:
+            names = sorted(os.listdir(real))
+        except OSError:
+            continue
+        for name in names:
+            if name in programs or name.startswith((".", "-")) or any(c.isspace() for c in name):
+                continue
+            path = os.path.join(real, name)
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                programs[name] = path
+    return programs
+
+
+def clean_env():
+    return dict(os.environ, LC_ALL="C", LANG="C", MANPAGER="cat", PAGER="cat")
+
+
+def manual_descriptions(names):
+    """One-line summaries from installed manual pages, via whatis. Never runs the programs."""
+    if not shutil.which("whatis"):
+        return {}
+    best = {}
+    names = list(names)
+    for start in range(0, len(names), 100):
+        chunk = names[start:start + 100]
+        try:
+            result = subprocess.run(["whatis", "-l", "--", *chunk], capture_output=True,
+                                    text=True, timeout=60, env=clean_env())
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        for line in result.stdout.splitlines():
+            match = WHATIS_LINE.match(line.strip())
+            if not match:
+                continue
+            name, section, description = match.groups()
+            rank = SECTION_RANK.get(section[:1])
+            if rank is None:
+                continue  # library functions and file formats, not commands
+            if name not in best or rank < best[name][0]:
+                best[name] = (rank, description.strip())
+    return {name: desc for name, (_, desc) in best.items()}
+
+
+def package_info(wanted_paths):
+    """Which package owns each program file, and each package's description, via pacman."""
+    if not shutil.which("pacman"):
+        return {}, {}
+    owners, descriptions = {}, {}
+    try:
+        files = subprocess.run(["pacman", "-Ql"], capture_output=True, text=True,
+                               timeout=120, env=clean_env())
+        for line in files.stdout.splitlines():
+            package, _, path = line.partition(" ")
+            if path in wanted_paths:
+                owners[path] = package
+        info = subprocess.run(["pacman", "-Qi"], capture_output=True, text=True,
+                              timeout=120, env=clean_env())
+        name = None
+        for line in info.stdout.splitlines():
+            key, sep, value = line.partition(":")
+            if not sep:
+                continue
+            key = key.strip()
+            if key == "Name":
+                name = value.strip()
+            elif key == "Description" and name:
+                descriptions[name] = value.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return owners, descriptions
+
+
+def scan_library():
+    """Build and save the list of every program on this PC with a short description."""
+    programs = find_programs()
+    manuals = manual_descriptions(programs)
+    wanted = set(programs.values()) | {os.path.realpath(p) for p in programs.values()}
+    owners, package_descriptions = package_info(wanted)
+    entries = []
+    for name, path in sorted(programs.items()):
+        package = owners.get(path) or owners.get(os.path.realpath(path))
+        if name in manuals:
+            description, source = manuals[name], "manual"
+        elif package and package_descriptions.get(package):
+            description, source = package_descriptions[package], "package"
+        else:
+            description, source = "", "none"
+        entries.append({"name": name, "path": path, "description": description,
+                        "source": source, "package": package})
+    library = {
+        "scanned_at": datetime.now().isoformat(timespec="seconds"),
+        "has_manuals": bool(shutil.which("whatis")),
+        "has_pacman": bool(shutil.which("pacman")),
+        "programs": entries,
+    }
+    write_json(library_path(), library)
+    return library
+
+
+def describe_scan(library):
+    programs = library["programs"]
+    manual = sum(p["source"] == "manual" for p in programs)
+    package = sum(p["source"] == "package" for p in programs)
+    print(f"Found {len(programs)} programs on this PC: {manual} described by their manual, "
+          f"{package} by their package, {len(programs) - manual - package} with no description.")
+    if not library.get("has_manuals"):
+        print("Tip: descriptions get much better with manual pages installed:")
+        print("  sudo pacman -S man-db man-pages")
+        print("Then run: doit rescan")
+
+
+def expand_word(word):
+    """A search word plus simple variations: plural/singular and common synonyms."""
+    forms = {word}
+    if len(word) > 3 and word.endswith("s"):
+        forms.add(word[:-1])
+    for form in list(forms):
+        forms.update(SYNONYMS.get(form, []))
+    return forms
+
+
+def search_library(programs, query, limit=20):
+    """Programs whose name, description or package match every word. Name matches first."""
+    words = [w for w in query.lower().split() if w]
+    if not words:
+        return 0, []
+    scored = []
+    for program in programs:
+        name = program["name"].lower()
+        haystack = " ".join([name, program["description"].lower(), (program["package"] or "").lower()])
+        if not all(any(form in haystack for form in expand_word(w)) for w in words):
+            continue
+        if name == words[0]:
+            score = 0
+        elif name.startswith(words[0]):
+            score = 1
+        elif all(w in name for w in words):
+            score = 2
+        elif all(w in haystack for w in words):
+            score = 3
+        else:
+            score = 4  # matched only through a synonym
+        scored.append((score, len(name), name, program))
+    scored.sort(key=lambda item: item[:3])
+    return len(scored), [item[3] for item in scored[:limit]]
+
+
+def search_easy(commands, query):
+    words = [w for w in query.lower().split() if w]
+    found = []
+    for entry in commands:
+        haystack = " ".join(entry["phrases"] + [entry["explanation"], entry["command"]]).lower()
+        if words and all(any(form in haystack for form in expand_word(w)) for w in words):
+            found.append(entry)
+    return found
+
+
+# ---------- the session ----------
+
+class State:
+    def __init__(self, commands, phrase_map, settings, dry_run):
+        self.commands = commands
+        self.phrase_map = phrase_map
+        self.settings = settings
+        self.dry_run = dry_run
+        self.custom = load_custom()
+        self._library = None
+
+    @property
+    def custom_map(self):
+        return {normalize(c["phrase"]): c for c in self.custom}
+
+    def library(self, scan_if_missing=True):
+        if self._library is None:
+            data = read_json(library_path(), None)
+            if data is None and scan_if_missing:
+                print("Looking at what's installed on this PC (only this once, a few seconds)...")
+                data = scan_library()
+                describe_scan(data)
+                print()
+            self._library = data
+        return self._library
+
+    def program(self, name):
+        library = self.library(scan_if_missing=False)
+        if not library:
+            return None
+        for program in library["programs"]:
+            if program["name"] == name:
+                return program
+        return None
+
+
+def custom_entry(custom, state):
+    """Turn a saved custom command into something the runner understands."""
+    explanation = "Your own command."
+    words = custom["command"].split()
+    if words and words[0] == "sudo":
+        words = words[1:]
+    if words:
+        program = state.program(words[0])
+        if program and program["description"]:
+            explanation = f"Your own command. ({program['name']}: {program['description']})"
+    return {"id": "custom", "category": "custom", "command": custom["command"],
+            "explanation": explanation, "confirm": custom.get("confirm", False),
+            "source_url": None, "warning": None}
+
+
+# ---------- built-in words ----------
+
+def match_builtin(norm):
+    """Returns (name, argument) if this is one of Alias Maker's own words, else None."""
+    words = norm.split()
+    if not words:
+        return None
+    if norm in ("list", "help", "what can you do", "what do you know"):
+        return ("list", None)
+    if norm in ("history", "show me what you did", "what did you do"):
+        return ("history", None)
+    if norm in ("menu", "database", "settings"):
+        return ("menu", None)
+    if norm in ("add", "add a command", "make a command", "new command"):
+        return ("add", None)
+    if norm in ("my commands", "custom commands"):
+        return ("custom", None)
+    if norm in ("rescan", "scan"):
+        return ("rescan", None)
+    if norm == "version":
+        return ("version", None)
+    if words[0] == "search":
+        return ("search", " ".join(words[1:]))
+    if words[0] == "forget" and len(words) > 1:
+        return ("forget", " ".join(words[1:]))
+    if len(words) == 2 and words[0] == "logging" and words[1] in ("on", "off"):
+        return ("logging", words[1])
+    if len(words) == 2 and words[0] == "answer" and words[1] in ("easy", "strict"):
+        return ("answer", words[1])
+    if len(words) == 3 and words[0] == "answer" and words[1] == "word":
+        return ("answer-word", words[2])
+    return None
+
+
+def run_builtin(name, arg, state):
+    if name == "list":
+        show_list(state.commands)
+        return 0
+    if name == "history":
+        return show_history(state.settings)
+    if name == "version":
+        print(f"{APP} {VERSION}")
+        return 0
+    if name == "logging":
+        set_logging(state.settings, arg == "on")
+        return 0
+    if name == "answer":
+        set_yes_words(state.settings, ["y", "yes"] if arg == "easy" else ["yes"])
+        return 0
+    if name == "answer-word":
+        set_yes_words(state.settings, [arg])
+        return 0
+    if name == "rescan":
+        print("Looking at what's installed on this PC...")
+        state._library = scan_library()
+        describe_scan(state._library)
+        return 0
+    if name == "search":
+        return cli_search(state, arg)
+    if name == "custom":
+        show_custom(state)
+        return 0
+    if not interactive():
+        print("That one needs you at a terminal to answer questions.")
+        return 2
+    try:
+        if name == "menu":
+            return menu_main(state)
+        if name == "add":
+            return add_custom(state)
+        if name == "forget":
+            return forget_custom(state, arg)
+    except LeaveMenu:
+        print("\nOkay, never mind.")
+        return 0
+    return 1
+
+
+def set_logging(settings, on):
+    settings["logging"] = on
+    save_settings(settings)
+    print("Logging is now on. It starts from now; nothing before this was recorded."
+          if on else "Logging is now off.")
+
+
+def set_yes_words(settings, words):
+    settings["yes_words"] = words
+    save_settings(settings)
+    print(f"To say yes, you'll now type: {yes_hint(settings)}")
+
 
 def show_list(commands):
-    print("Here's what I know how to do. Type: doit <phrase>\n")
+    print("Here are the easy commands. Type: doit <phrase>\n")
     by_category = {}
     for entry in commands:
         by_category.setdefault(entry["category"], []).append(entry)
@@ -170,8 +580,7 @@ def show_list(commands):
             print(f"  {phrases}")
             print(f"      {entry['explanation']}")
         print()
-    print("Settings: doit logging on|off, doit answer easy|strict, "
-          "doit answer word <word>, doit history")
+    print("More: doit menu, doit search <words>, doit add, doit my commands")
 
 
 def show_history(settings):
@@ -195,35 +604,304 @@ def show_history(settings):
     return 0
 
 
-def handle_builtin(norm, settings, commands):
-    """Returns an exit code if this was a built-in, or None if it wasn't."""
-    words = norm.split()
-    if norm in ("list", "help", "what can you do", "what do you know"):
-        show_list(commands)
-        return 0
-    if norm in ("history", "show me what you did", "what did you do"):
-        return show_history(settings)
-    if norm == "version":
-        print(f"Do It {VERSION}")
-        return 0
-    if len(words) == 2 and words[0] == "logging" and words[1] in ("on", "off"):
-        settings["logging"] = words[1] == "on"
-        save_settings(settings)
-        print(f"Logging is now {words[1]}."
-              + (" It starts from now; nothing before this was recorded."
-                 if words[1] == "on" else ""))
-        return 0
-    if len(words) == 2 and words[0] == "answer" and words[1] in ("easy", "strict"):
-        settings["yes_words"] = ["y", "yes"] if words[1] == "easy" else ["yes"]
-        save_settings(settings)
-        print(f"To say yes, you'll now type: {yes_hint(settings)}")
-        return 0
-    if len(words) == 3 and words[0] == "answer" and words[1] == "word":
-        settings["yes_words"] = [words[2]]
-        save_settings(settings)
-        print(f"To say yes, you'll now type: {yes_hint(settings)}")
-        return 0
-    return None
+def show_custom(state):
+    if not state.custom:
+        print("You haven't made any custom commands yet. Make one with: doit add")
+        return
+    print("Your custom commands:\n")
+    for custom in state.custom:
+        ask_note = "  (asks first)" if custom.get("confirm") else ""
+        print(f"  doit {custom['phrase']}  ->  {custom['command']}{ask_note}")
+
+
+def print_results(state, query):
+    """Print search results for both tiers. Returns the list of programs shown (numbered)."""
+    easy = search_easy(state.commands, query)
+    if easy:
+        print("Easy commands:")
+        for entry in easy:
+            print(f"  doit {entry['phrases'][0]}  ->  {entry['explanation']}")
+        print()
+    library = state.library()
+    total, shown = search_library(library["programs"], query)
+    if not shown:
+        print(f"No programs on this PC matched \"{query}\". Try different or fewer words.")
+        return []
+    print("Programs on this PC:")
+    for number, program in enumerate(shown, 1):
+        description = program["description"] or "(no description)"
+        print(f"  {number:>2}) {program['name']}  -  {description}")
+    if total > len(shown):
+        print(f"  ...and {total - len(shown)} more. Add words to narrow it down.")
+    return shown
+
+
+def cli_search(state, query):
+    if not query:
+        print("Tell me what to look for, for example: doit search drives")
+        return 1
+    print_results(state, query)
+    return 0
+
+
+# ---------- custom commands ----------
+
+def check_phrase(state, phrase):
+    """Returns (ok, replace_custom) after warning about clashes. Asks the user when needed."""
+    norm = normalize(phrase)
+    if not norm:
+        print("That's empty. Type the words you want to use.")
+        return False, False
+    if match_builtin(norm) or norm in NEVER_MIND:
+        print(f"\"{phrase}\" is one of {APP}'s own words, so it can't be used. Pick something else.")
+        return False, False
+    existing = state.custom_map.get(norm)
+    if existing:
+        print(f"You already use \"{existing['phrase']}\" for: {existing['command']}")
+        answer = ask_or_leave(f"Replace it? (type {yes_hint(state.settings)} for yes) ")
+        return (True, True) if is_yes(answer, state.settings) else (False, False)
+    easy = state.phrase_map.get(norm)
+    if easy:
+        print(f"\"{phrase}\" is already an easy command (it runs: {easy['command']}).")
+        answer = ask_or_leave(f"Use it for yours instead? Yours will win. "
+                              f"(type {yes_hint(state.settings)} for yes) ")
+        return (True, False) if is_yes(answer, state.settings) else (False, False)
+    return True, False
+
+
+def pick_program(state):
+    """Search this PC and pick one program. Returns its name, or None."""
+    while True:
+        query = ask_or_leave("Search for what? (for example drives, wifi, battery; Enter to go back) ")
+        if not query.strip():
+            return None
+        shown = print_results(state, query.strip())
+        if not shown:
+            continue
+        number = choose(len(shown), "Pick a program by number (Enter to search again): ")
+        if number:
+            return shown[number - 1]["name"]
+
+
+def pick_easy(state):
+    for number, entry in enumerate(state.commands, 1):
+        print(f"  {number:>2}) {entry['phrases'][0]}  ->  {entry['command']}")
+    number = choose(len(state.commands))
+    return state.commands[number - 1] if number else None
+
+
+def add_custom(state, command=None, program=None):
+    """Walk the user through making their own phrase for a command."""
+    print("\nLet's make your own command.")
+    if command is None and program is None:
+        print("\nWhat should it run?")
+        print("  1) Search the programs on this PC")
+        print("  2) Pick one of the easy commands")
+        print("  3) Type the command myself")
+        how = choose(3)
+        if how == 0:
+            return 0
+        if how == 1:
+            program = pick_program(state)
+            if not program:
+                return 0
+        elif how == 2:
+            entry = pick_easy(state)
+            if not entry:
+                return 0
+            command = entry["command"]
+        else:
+            command = ask_or_leave("Type the command exactly: ").strip()
+            if not command:
+                return 0
+    if program:
+        extra = ask_or_leave(f"Add anything after \"{program}\"? For example -f. "
+                             f"(Enter for nothing) ").strip()
+        command = f"{program} {extra}".strip()
+    print(f"\nIt will run: {command}")
+
+    while True:
+        phrase = ask_or_leave("What do you want to type for it, after 'doit'? ").strip()
+        ok, replace = check_phrase(state, phrase)
+        if ok:
+            break
+
+    if "sudo" in command.split():
+        confirm = True
+        print("It needs admin rights (sudo), so I'll always ask before running it.")
+    else:
+        answer = ask_or_leave(f"Ask before running it every time? "
+                              f"(type {yes_hint(state.settings)} for yes, anything else for no) ")
+        confirm = is_yes(answer, state.settings)
+
+    print(f"\n  doit {phrase}  ->  {command}" + ("  (asks first)" if confirm else ""))
+    answer = ask_or_leave(f"Save this? (type {yes_hint(state.settings)} for yes) ")
+    if not is_yes(answer, state.settings):
+        print("Okay, not saved.")
+        return 1
+    norm = normalize(phrase)
+    if replace:
+        state.custom = [c for c in state.custom if normalize(c["phrase"]) != norm]
+    state.custom.append({"phrase": phrase, "command": command, "confirm": confirm,
+                         "added": datetime.now().isoformat(timespec="seconds")})
+    save_custom(state.custom)
+    print(f"Saved. Now \"doit {phrase}\" runs: {command}")
+    return 0
+
+
+def forget_custom(state, phrase):
+    custom = state.custom_map.get(normalize(phrase))
+    if not custom:
+        print(f"You don't have a custom command called \"{phrase}\". See yours with: doit my commands")
+        return 1
+    answer = ask_or_leave(f"Remove \"doit {custom['phrase']}\" (runs: {custom['command']})? "
+                          f"(type {yes_hint(state.settings)} for yes) ")
+    if not is_yes(answer, state.settings):
+        print("Okay, kept it.")
+        return 1
+    state.custom = [c for c in state.custom if c is not custom]
+    save_custom(state.custom)
+    print(f"Removed \"doit {custom['phrase']}\".")
+    return 0
+
+
+# ---------- the menu ----------
+
+def menu_main(state):
+    while True:
+        print(f"\n{APP} menu")
+        print("  1) Database")
+        print("  2) Settings")
+        print("  3) History")
+        number = choose(3, "Pick a number (Enter to leave): ")
+        if number == 0:
+            return 0
+        if number == 1:
+            menu_database(state)
+        elif number == 2:
+            menu_settings(state)
+        else:
+            show_history(state.settings)
+
+
+def menu_database(state):
+    while True:
+        library = state.library(scan_if_missing=False)
+        when = f"last scanned {library['scanned_at'].replace('T', ' at ')}" if library else "not scanned yet"
+        print("\nDatabase")
+        print("  1) Easy commands (plain English)")
+        print("  2) Every command on this PC (search)")
+        print("  3) Custom commands (yours)")
+        print(f"  4) Rescan this PC ({when})")
+        number = choose(4)
+        if number == 0:
+            return
+        if number == 1:
+            menu_easy(state)
+        elif number == 2:
+            menu_every(state)
+        elif number == 3:
+            menu_custom(state)
+        else:
+            run_builtin("rescan", None, state)
+
+
+def menu_easy(state):
+    while True:
+        print("\nEasy commands")
+        entry = pick_easy(state)
+        if not entry:
+            return
+        print(f"\n{entry['explanation']}")
+        print(f"Type any of: " + ", ".join(f'"doit {p}"' for p in entry["phrases"]))
+        print(f"Real command: {entry['command']}")
+        print("  1) Run it now")
+        print("  2) Make my own phrase for it")
+        number = choose(2)
+        if number == 1:
+            run_entry_flow(entry, normalize(entry["phrases"][0]), state)
+        elif number == 2:
+            add_custom(state, command=entry["command"])
+
+
+def menu_every(state):
+    while True:
+        print("\nEvery command on this PC")
+        name = pick_program(state)
+        if not name:
+            return
+        program = state.program(name) or {"name": name, "description": "", "package": None, "path": ""}
+        print(f"\n{program['name']}: {program['description'] or '(no description)'}")
+        if program.get("package"):
+            print(f"Comes from the package: {program['package']}")
+        print(f"Lives at: {program['path']}")
+        print("  1) Make a custom command for it")
+        print("  2) Read its manual")
+        number = choose(2)
+        if number == 1:
+            add_custom(state, program=name)
+        elif number == 2:
+            read_manual(name, state)
+
+
+def read_manual(name, state):
+    if not shutil.which("man"):
+        print("Manual pages aren't installed. Install them with: sudo pacman -S man-db man-pages")
+        return
+    if state.dry_run:
+        print(f"[dry run] Would run: man {name}")
+        return
+    if subprocess.run(["man", name]).returncode != 0:
+        print(f"{name} doesn't have a manual installed.")
+
+
+def menu_custom(state):
+    while True:
+        print("\nCustom commands")
+        print("  1) Make a new one")
+        for number, custom in enumerate(state.custom, 2):
+            print(f"  {number:>2}) doit {custom['phrase']}  ->  {custom['command']}")
+        number = choose(len(state.custom) + 1)
+        if number == 0:
+            return
+        if number == 1:
+            add_custom(state)
+            continue
+        custom = state.custom[number - 2]
+        print(f"\ndoit {custom['phrase']}  ->  {custom['command']}")
+        print("  1) Run it now")
+        print("  2) Remove it")
+        action = choose(2)
+        if action == 1:
+            run_entry_flow(custom_entry(custom, state), normalize(custom["phrase"]), state)
+        elif action == 2:
+            forget_custom(state, custom["phrase"])
+
+
+def menu_settings(state):
+    settings = state.settings
+    while True:
+        logging = {True: "on", False: "off", None: "not chosen yet"}[settings["logging"]]
+        print("\nSettings")
+        print(f"  1) Command log (now {logging}): turn {'off' if settings['logging'] else 'on'}")
+        print(f"  2) Yes answer (now {yes_hint(settings)}): 'y' or 'yes'")
+        print("  3) Yes answer: only the full word 'yes'")
+        print("  4) Yes answer: pick my own word")
+        number = choose(4)
+        if number == 0:
+            return
+        if number == 1:
+            set_logging(settings, not settings["logging"])
+        elif number == 2:
+            set_yes_words(settings, ["y", "yes"])
+        elif number == 3:
+            set_yes_words(settings, ["yes"])
+        else:
+            word = normalize(ask_or_leave("Type your yes word: "))
+            if word and " " not in word:
+                set_yes_words(settings, [word])
+            else:
+                print("Pick a single word.")
 
 
 # ---------- running a command ----------
@@ -233,7 +911,7 @@ def explain_and_confirm(entry, settings):
     if entry.get("source_url"):
         print("\nThis downloads and runs a script from:")
         print(f"   {highlight(entry['source_url'])}")
-        print("That's the vendor's own official installer, not something changed by Do It.")
+        print(f"That's the vendor's own official installer, not something changed by {APP}.")
     if entry.get("warning"):
         print(f"\nHeads up: {entry['warning']}")
     print(f"\nReal command: {entry['command']}")
@@ -246,40 +924,48 @@ def explain_and_confirm(entry, settings):
     return is_yes(answer, settings)
 
 
-def run_entry(entry, phrase, settings, dry_run):
-    if dry_run:
+def run_entry(entry, phrase, state):
+    if state.dry_run:
         print(f"[dry run] Would run: {entry['command']}")
         return 0
     try:
         code = subprocess.run(entry["command"], shell=True).returncode
     except KeyboardInterrupt:
         code = 130
-    write_log(settings, phrase, entry["command"], code)
+    write_log(state.settings, phrase, entry["command"], code)
     if code != 0:
         print(f"\nThat didn't work (exit code {code}).")
+    elif entry.get("category", "").startswith("install") and library_path().is_file():
+        state._library = scan_library()  # new software: refresh the list quietly
     return code
 
 
-def handle(text, commands, phrase_map, settings, dry_run):
+def run_entry_flow(entry, phrase, state):
+    first_run_logging(state.settings)
+    if not explain_and_confirm(entry, state.settings):
+        print("Okay, not doing it.")
+        return 1
+    return run_entry(entry, phrase, state)
+
+
+def handle(text, state):
     """Returns an exit code, or None if the phrase wasn't recognised."""
     norm = normalize(text)
-    code = handle_builtin(norm, settings, commands)
-    if code is not None:
-        return code
-    entry = phrase_map.get(norm)
+    builtin = match_builtin(norm)
+    if builtin:
+        return run_builtin(*builtin, state)
+    custom = state.custom_map.get(norm)
+    entry = custom_entry(custom, state) if custom else state.phrase_map.get(norm)
     if entry is None:
         print(f"I don't know how to \"{text.strip()}\" yet.")
-        guesses = difflib.get_close_matches(norm, list(phrase_map), n=3, cutoff=0.6)
+        known = list(state.custom_map) + list(state.phrase_map)
+        guesses = difflib.get_close_matches(norm, known, n=3, cutoff=0.6)
         if guesses:
             print("Did you mean: " + ", ".join(f'"{g}"' for g in guesses) + "?")
         else:
-            print("Type 'doit list' to see what I know.")
+            print("Type 'doit menu' to see everything, or 'doit search <words>' to find a program.")
         return None
-    first_run_logging(settings)
-    if not explain_and_confirm(entry, settings):
-        print("Okay, not doing it.")
-        return 1
-    return run_entry(entry, norm, settings, dry_run)
+    return run_entry_flow(entry, norm, state)
 
 
 def main(argv):
@@ -289,18 +975,19 @@ def main(argv):
         print(__doc__.strip())
         return 0
     if args and args[0] == "--version":
-        print(f"Do It {VERSION}")
+        print(f"{APP} {VERSION}")
         return 0
 
+    migrate_old_dirs()
     try:
         commands, phrase_map = load_index(find_index())
     except (OSError, ValueError, KeyError) as err:
-        print(f"Do It couldn't load its command list: {err}", file=sys.stderr)
+        print(f"{APP} couldn't load its command list: {err}", file=sys.stderr)
         return 2
-    settings = load_settings()
+    state = State(commands, phrase_map, load_settings(), dry_run)
 
     if args:
-        code = handle(" ".join(args), commands, phrase_map, settings, dry_run)
+        code = handle(" ".join(args), state)
         return 1 if code is None else code
 
     if not interactive():
@@ -317,7 +1004,7 @@ def main(argv):
         if norm in NEVER_MIND:
             print("Okay, never mind.")
             return 0
-        code = handle(text, commands, phrase_map, settings, dry_run)
+        code = handle(text, state)
         if code is not None:
             return code
 

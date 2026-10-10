@@ -36,13 +36,16 @@ TEST_INDEX = {
 class DoitTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        home = Path(self.tmp.name)
+        home = Path(self.tmp.name).resolve()
+        self.home = home
         index = home / "commands.json"
         index.write_text(json.dumps(TEST_INDEX))
+        self.programs = home / "programs"
+        self.programs.mkdir()
         self.env = mock.patch.dict(os.environ, {
             "HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
             "XDG_DATA_HOME": str(home / "data"), "DOIT_COMMANDS": str(index),
-            "NO_COLOR": "1",
+            "NO_COLOR": "1", "PATH": str(self.programs),
         })
         self.env.start()
         os.environ.pop("DOIT_DRY_RUN", None)
@@ -217,6 +220,228 @@ class TestRealIndex(DoitTestCase):
             self.assertTrue(required <= set(entry), entry["id"])
             if entry["source_url"]:
                 self.assertTrue(entry["confirm"], f"{entry['id']} downloads code but doesn't ask")
+
+
+def make_program(folder, name, body="exit 0"):
+    path = folder / name
+    path.write_text(f"#!/bin/sh\n{body}\n")
+    path.chmod(0o755)
+    return path
+
+
+FAKE_WHATIS = """printf '%s\\n' \\
+  'lsblk (8)            - list block devices' \\
+  'ls (1)               - list directory contents' \\
+  'printf (3)           - formatted output conversion' \\
+  'printf (1)           - format and print data' \\
+  'time (2)             - get time in seconds'
+"""
+
+
+class ScanTestCase(DoitTestCase):
+    """A fake PC: a few programs, plus stand-in whatis and pacman that print real-looking output."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ("lsblk", "ls", "printf", "time", "mystery", "orphan"):
+            make_program(self.programs, name)
+        p = self.programs
+        make_program(p, "whatis", FAKE_WHATIS)
+        pacman = f"""case "$1" in
+  -Ql) printf '%s\\n' 'util-linux {p}/lsblk' 'coreutils {p}/ls' 'mystery-pkg {p}/mystery' 'mystery-pkg /usr/share/doc/x' ;;
+  -Qi) printf '%s\\n' 'Name            : util-linux' 'Description     : Miscellaneous system utilities for Linux' '' \\
+         'Name            : coreutils' 'Description     : The basic file utilities' '' \\
+         'Name            : mystery-pkg' 'Description     : A mystery tool' ;;
+esac
+"""
+        make_program(p, "pacman", pacman)
+
+    def library(self):
+        return {e["name"]: e for e in json.loads(doit.library_path().read_text())["programs"]}
+
+
+class TestScan(ScanTestCase):
+    def test_rescan_reads_manuals_then_packages(self):
+        code, out, _ = self.run_doit(["rescan"], tty=False)
+        self.assertEqual(code, 0)
+        self.assertIn("Found", out)
+        lib = self.library()
+        self.assertEqual(lib["lsblk"]["description"], "list block devices")
+        self.assertEqual(lib["lsblk"]["source"], "manual")
+        self.assertEqual(lib["lsblk"]["package"], "util-linux")
+        self.assertEqual(lib["printf"]["description"], "format and print data")
+        self.assertEqual(lib["mystery"]["description"], "A mystery tool")
+        self.assertEqual(lib["mystery"]["source"], "package")
+        self.assertEqual(lib["time"]["source"], "none")  # only a section-2 page, not a command
+        self.assertEqual(lib["orphan"]["description"], "")
+
+    def test_search_finds_drives_through_plain_words(self):
+        code, out, _ = self.run_doit(["search", "drives"], tty=False)
+        self.assertEqual(code, 0)
+        self.assertIn("lsblk  -  list block devices", out)
+        self.assertNotIn(" ls  -", out)
+
+    def test_exact_name_comes_first(self):
+        self.run_doit(["rescan"], tty=False)
+        library = json.loads(doit.library_path().read_text())
+        _, shown = doit.search_library(library["programs"], "ls")
+        self.assertEqual(shown[0]["name"], "ls")
+
+    def test_first_search_scans_automatically(self):
+        self.assertFalse(doit.library_path().exists())
+        code, out, _ = self.run_doit(["search", "mystery"], tty=False)
+        self.assertEqual(code, 0)
+        self.assertIn("only this once", out)
+        self.assertTrue(doit.library_path().exists())
+
+    def test_search_also_shows_easy_commands(self):
+        _, out, _ = self.run_doit(["search", "harmless"], tty=False)
+        self.assertIn("Easy commands:", out)
+        self.assertIn("doit do the thing", out)
+
+
+class TestScanWithoutTools(DoitTestCase):
+    def test_works_without_manuals_or_pacman(self):
+        make_program(self.programs, "lsblk")
+        code, out, _ = self.run_doit(["rescan"], tty=False)
+        self.assertEqual(code, 0)
+        self.assertIn("sudo pacman -S man-db man-pages", out)
+        lib = json.loads(doit.library_path().read_text())["programs"]
+        self.assertEqual([p["name"] for p in lib], ["lsblk"])
+
+
+class TestCustomCommands(ScanTestCase):
+    def test_type_it_myself_then_use_it(self):
+        code, out, _ = self.run_doit(["add"], answers=["3", "true", "just check my fucking drives", "no", "yes"])
+        self.assertEqual(code, 0)
+        self.assertIn('Now "doit just check my fucking drives" runs: true', out)
+        code, out, _ = self.run_doit(["Just", "check", "my", "fucking", "drives!!"], answers=["no"])
+        self.assertEqual(code, 0)
+        self.assertIn("Real command: true", out)
+        self.assertIn("Your own command.", out)
+
+    def test_pick_from_search_and_add_options(self):
+        answers = ["1", "drives", "1", "-f", "check drives", "no", "yes"]
+        code, _, _ = self.run_doit(["add"], answers=answers)
+        self.assertEqual(code, 0)
+        saved = json.loads(doit.custom_path().read_text())["commands"]
+        self.assertEqual(saved[0]["command"], "lsblk -f")
+        _, out, _ = self.run_doit(["--dry-run", "check drives"], answers=["no"])
+        self.assertIn("(lsblk: list block devices)", out)
+        self.assertIn("[dry run] Would run: lsblk -f", out)
+
+    def test_pick_from_easy_commands(self):
+        code, _, _ = self.run_doit(["add"], answers=["2", "2", "smash", "no", "yes"])
+        self.assertEqual(code, 0)
+        code, _, _ = self.run_doit(["smash"], answers=["no"])
+        self.assertEqual(code, 3)
+
+    def test_own_words_are_reserved(self):
+        _, out, _ = self.run_doit(["add"], answers=["3", "true", "menu", "my thing", "no", "yes"])
+        self.assertIn("one of Alias Maker's own words", out)
+        saved = json.loads(doit.custom_path().read_text())["commands"]
+        self.assertEqual(saved[0]["phrase"], "my thing")
+
+    def test_overriding_an_easy_phrase_asks_and_then_wins(self):
+        self.run_doit(["add"], answers=["3", "exit 5", "thing", "yes", "no", "yes"])
+        code, _, _ = self.run_doit(["thing"], answers=["no"])
+        self.assertEqual(code, 5)
+
+    def test_saying_no_to_override_asks_for_another_phrase(self):
+        _, out, prompts = self.run_doit(["add"], answers=["3", "exit 5", "thing", "no", "other", "no", "yes"])
+        self.assertIn("already an easy command", out)
+        saved = json.loads(doit.custom_path().read_text())["commands"]
+        self.assertEqual(saved[0]["phrase"], "other")
+
+    def test_replacing_my_own_phrase(self):
+        self.run_doit(["add"], answers=["3", "true", "x", "no", "yes"])
+        self.run_doit(["add"], answers=["3", "exit 4", "x", "yes", "no", "yes"])
+        saved = json.loads(doit.custom_path().read_text())["commands"]
+        self.assertEqual(len(saved), 1)
+        code, _, _ = self.run_doit(["x"], answers=["no"])
+        self.assertEqual(code, 4)
+
+    def test_sudo_commands_always_ask(self):
+        _, out, prompts = self.run_doit(["add"], answers=["3", "sudo true", "admin thing", "yes"])
+        self.assertIn("always ask before running it", out)
+        self.assertFalse(any(p.startswith("Ask before running") for p in prompts))
+        saved = json.loads(doit.custom_path().read_text())["commands"]
+        self.assertTrue(saved[0]["confirm"])
+
+    def test_not_saving(self):
+        code, out, _ = self.run_doit(["add"], answers=["3", "true", "x", "no", "nah"])
+        self.assertEqual(code, 1)
+        self.assertFalse(doit.custom_path().exists())
+
+    def test_list_and_forget(self):
+        self.run_doit(["add"], answers=["3", "true", "my thing", "no", "yes"])
+        _, out, _ = self.run_doit(["my", "commands"], tty=False)
+        self.assertIn("doit my thing  ->  true", out)
+        code, _, _ = self.run_doit(["forget", "my", "thing"], answers=["yes"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(doit.custom_path().read_text())["commands"], [])
+        code, out, _ = self.run_doit(["forget", "my", "thing"], answers=[])
+        self.assertEqual(code, 1)
+
+    def test_ctrl_d_in_the_middle_saves_nothing(self):
+        code, out, _ = self.run_doit(["add"], answers=["3", "true"])
+        self.assertEqual(code, 0)
+        self.assertIn("never mind", out)
+        self.assertFalse(doit.custom_path().exists())
+
+
+class TestMenu(ScanTestCase):
+    def test_walk_into_custom_commands_and_back_out(self):
+        code, out, _ = self.run_doit(["menu"], answers=["1", "3", "", "", ""])
+        self.assertEqual(code, 0)
+        self.assertIn("Alias Maker menu", out)
+        self.assertIn("1) Make a new one", out)
+
+    def test_run_an_easy_command_from_the_menu(self):
+        code, out, _ = self.run_doit(["menu"], answers=["1", "1", "1", "1", "no", "", "", ""])
+        self.assertEqual(code, 0)
+        self.assertIn("Real command: true", out)
+
+    def test_find_a_program_and_make_a_custom_command(self):
+        answers = ["1", "2", "drives", "1", "1", "-f", "see drives", "no", "yes", "", "", ""]
+        code, out, _ = self.run_doit(["menu"], answers=answers)
+        self.assertEqual(code, 0)
+        self.assertIn("Comes from the package: util-linux", out)
+        saved = json.loads(doit.custom_path().read_text())["commands"]
+        self.assertEqual(saved[0], {**saved[0], "phrase": "see drives", "command": "lsblk -f"})
+
+    def test_change_yes_word_in_settings(self):
+        self.run_doit(["menu"], answers=["2", "3", "", ""])
+        self.assertEqual(self.settings()["yes_words"], ["yes"])
+
+    def test_bad_input_asks_again(self):
+        _, out, _ = self.run_doit(["menu"], answers=["9", "banana", ""])
+        self.assertIn("Type a number from 1 to 3", out)
+
+    def test_ctrl_d_leaves(self):
+        code, out, _ = self.run_doit(["menu"], answers=["1"])
+        self.assertEqual(code, 0)
+        self.assertIn("never mind", out)
+
+    def test_menu_from_the_waiting_prompt(self):
+        code, out, prompts = self.run_doit([], answers=["menu", ""])
+        self.assertEqual(code, 0)
+        self.assertEqual(prompts[0], "Do what? I am waiting... ")
+        self.assertIn("Alias Maker menu", out)
+
+    def test_needs_a_terminal(self):
+        code, out, _ = self.run_doit(["menu"], tty=False)
+        self.assertEqual(code, 2)
+
+
+class TestOldFolders(DoitTestCase):
+    def test_moves_settings_from_the_old_doit_folder(self):
+        old = self.home / "config" / "doit"
+        old.mkdir(parents=True)
+        (old / "settings.json").write_text(json.dumps({"logging": False, "yes_words": ["yes"]}))
+        self.run_doit(["list"], tty=False)
+        self.assertEqual(self.settings()["yes_words"], ["yes"])
+        self.assertFalse(old.exists())
 
 
 if __name__ == "__main__":
