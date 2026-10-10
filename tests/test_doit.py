@@ -1,21 +1,18 @@
 """Tests for the doit prototype. Run with: python3 -m unittest discover -s tests"""
 
 import contextlib
-import importlib.machinery
-import importlib.util
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-_loader = importlib.machinery.SourceFileLoader("doit", str(ROOT / "src" / "doit"))
-_spec = importlib.util.spec_from_loader("doit", _loader)
-doit = importlib.util.module_from_spec(_spec)
-_loader.exec_module(doit)
+sys.path.insert(0, str(ROOT / "src"))
+import aliasmaker_core as doit  # noqa: E402  (the engine behind doit and the window)
 
 TEST_INDEX = {
     "commands": [
@@ -276,6 +273,7 @@ class TestScan(ScanTestCase):
         self.assertEqual(lib["orphan"]["description"], "")
 
     def test_search_finds_drives_through_plain_words(self):
+        self.run_doit(["rescan"], tty=False)
         code, out, _ = self.run_doit(["search", "drives"], tty=False)
         self.assertEqual(code, 0)
         self.assertIn("lsblk  -  list block devices", out)
@@ -287,12 +285,11 @@ class TestScan(ScanTestCase):
         _, shown = doit.search_library(library["programs"], "ls")
         self.assertEqual(shown[0]["name"], "ls")
 
-    def test_first_search_scans_automatically(self):
-        self.assertFalse(doit.library_path().exists())
+    def test_search_before_any_scan_says_the_database_is_empty(self):
         code, out, _ = self.run_doit(["search", "mystery"], tty=False)
         self.assertEqual(code, 0)
-        self.assertIn("only this once", out)
-        self.assertTrue(doit.library_path().exists())
+        self.assertIn("The database is empty", out)
+        self.assertFalse(doit.library_path().exists())
 
     def test_search_also_shows_easy_commands(self):
         _, out, _ = self.run_doit(["search", "harmless"], tty=False)
@@ -321,6 +318,7 @@ class TestCustomCommands(ScanTestCase):
         self.assertIn("Your own command.", out)
 
     def test_pick_from_search_and_add_options(self):
+        self.run_doit(["rescan"], tty=False)
         answers = ["1", "drives", "1", "-f", "check drives", "no", "yes"]
         code, _, _ = self.run_doit(["add"], answers=answers)
         self.assertEqual(code, 0)
@@ -403,6 +401,7 @@ class TestMenu(ScanTestCase):
         self.assertIn("Real command: true", out)
 
     def test_find_a_program_and_make_a_custom_command(self):
+        self.run_doit(["rescan"], tty=False)
         answers = ["1", "2", "drives", "1", "1", "-f", "see drives", "no", "yes", "", "", ""]
         code, out, _ = self.run_doit(["menu"], answers=answers)
         self.assertEqual(code, 0)
@@ -442,6 +441,38 @@ class TestOldFolders(DoitTestCase):
         self.run_doit(["list"], tty=False)
         self.assertEqual(self.settings()["yes_words"], ["yes"])
         self.assertFalse(old.exists())
+
+
+
+class TestWindowHelpers(DoitTestCase):
+    """The non-interactive helpers the Alias Maker window uses."""
+
+    def test_phrase_problem(self):
+        _, phrase_map = doit.load_index(Path(os.environ["DOIT_COMMANDS"]))
+        custom_map = {"mine": {"phrase": "mine", "command": "ls"}}
+        check = lambda text: doit.phrase_problem(doit.normalize(text), custom_map, phrase_map)
+        self.assertEqual(check("  !! "), ("empty", None))
+        self.assertEqual(check("menu"), ("reserved", None))
+        self.assertEqual(check("search my stuff"), ("reserved", None))
+        self.assertEqual(check("never mind"), ("reserved", None))
+        self.assertEqual(check("Mine!"), ("custom-clash", "ls"))
+        self.assertEqual(check("thing"), ("easy-clash", "true"))
+        self.assertEqual(check("just check my fucking drives"), (None, None))
+
+    def test_save_replaces_same_phrase_and_remove(self):
+        doit.save_custom_command("Check Drives", "lsblk", False)
+        doit.save_custom_command("check drives!", "lsblk -f", True)
+        saved = doit.load_custom()
+        self.assertEqual(len(saved), 1)
+        self.assertEqual((saved[0]["command"], saved[0]["confirm"]), ("lsblk -f", True))
+        self.assertEqual(doit.remove_custom_command("CHECK DRIVES"), [])
+        self.assertEqual(doit.load_custom(), [])
+
+    def test_doit_sees_phrases_saved_by_the_window(self):
+        doit.save_custom_command("see drives", "true", False)
+        code, out, _ = self.run_doit(["see", "drives"], answers=["no"])
+        self.assertEqual(code, 0)
+        self.assertIn("Real command: true", out)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,794 @@
+#!/usr/bin/env python3
+"""Alias Maker: a terminal window with a Database and your Custom Commands in its menu.
+
+It runs your normal shell (fish on CachyOS), like Konsole. The ☰ menu adds:
+  Database          every program on this PC, searchable, filled by a scan
+                    the first time Alias Maker opens
+  Custom Commands   your own phrases: doit <your phrase> runs the real command
+
+Usage: aliasmaker [--workdir DIR] [-e COMMAND...]
+Needs: sudo pacman -S vte4 python-gobject
+"""
+
+import os
+import pwd
+import shlex
+import sys
+import threading
+
+SRC_DIR = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, SRC_DIR)
+
+import aliasmaker_core as core  # noqa: E402
+
+MISSING_PACKAGES = ("The Alias Maker window needs two packages from CachyOS's repos:\n"
+                    "  sudo pacman -S vte4 python-gobject")
+
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help", "--version"):
+    print(f"{core.APP} {core.VERSION}" if sys.argv[1] == "--version" else __doc__.strip())
+    sys.exit(0)
+
+try:
+    import gi
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Vte", "3.91")
+    from gi.repository import Gdk, Gio, GLib, Gtk, Vte  # noqa: E402
+except (ImportError, ValueError) as err:
+    print(f"{MISSING_PACKAGES}\n({err})", file=sys.stderr)
+    sys.exit(1)
+
+APP_ID = "io.github.thestylewithin.aliasmaker"
+MAX_ROWS = 300
+
+
+# ---------- small helpers ----------
+
+def user_shell():
+    """The user's login shell, the same one Konsole would start."""
+    candidates = []
+    try:
+        candidates.append(pwd.getpwuid(os.getuid()).pw_shell)
+    except KeyError:
+        pass
+    candidates += [os.environ.get("SHELL", ""), "/bin/bash", "/bin/sh"]
+    for shell in candidates:
+        if shell and os.access(shell, os.X_OK):
+            return shell
+    return "/bin/sh"
+
+
+def parse_args(argv):
+    """Understands the options desktops pass to a default terminal: --workdir and -e."""
+    workdir, command = None, None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            print(__doc__.strip())
+            sys.exit(0)
+        if arg == "--version":
+            print(f"{core.APP} {core.VERSION}")
+            sys.exit(0)
+        if arg in ("-e", "-x", "--command", "--"):
+            command = argv[i + 1:] or None
+            break
+        if arg in ("--workdir", "--working-directory", "-w") and i + 1 < len(argv):
+            workdir = argv[i + 1]
+            i += 2
+            continue
+        if arg.startswith(("--workdir=", "--working-directory=")):
+            workdir = arg.split("=", 1)[1]
+        i += 1
+    return workdir, command
+
+
+def labeled_button(icon, text, tooltip=None):
+    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+    box.append(Gtk.Image.new_from_icon_name(icon))
+    box.append(Gtk.Label(label=text))
+    button = Gtk.Button()
+    button.set_child(box)
+    if tooltip:
+        button.set_tooltip_text(tooltip)
+    return button
+
+
+def clear_list(listbox):
+    child = listbox.get_first_child()
+    while child is not None:
+        following = child.get_next_sibling()
+        listbox.remove(child)
+        child = following
+
+
+def padded_box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=12):
+    box = Gtk.Box(orientation=orientation, spacing=spacing)
+    for side in ("top", "bottom", "start", "end"):
+        getattr(box, f"set_margin_{side}")(margin)
+    return box
+
+
+def text_label(text, css=None, wrap=True):
+    label = Gtk.Label(label=text, xalign=0)
+    label.set_wrap(wrap)
+    if css:
+        label.add_css_class(css)
+    return label
+
+
+def two_line_row(title, subtitle):
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+    for side in ("top", "bottom", "start", "end"):
+        getattr(box, f"set_margin_{side}")(6)
+    box.append(text_label(title, "heading", wrap=False))
+    box.append(text_label(subtitle, "dim-label"))
+    row = Gtk.ListBoxRow()
+    row.set_child(box)
+    return row
+
+
+def scanned_when(library):
+    return library.get("scanned_at", "").replace("T", " at ")
+
+
+# ---------- scanning in the background ----------
+
+class Scanner:
+    """Runs the scan off the main thread so the window never freezes."""
+
+    def __init__(self):
+        self.running = False
+        self.error = None
+        self.listeners = []
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self.error = None
+        self.notify()
+        threading.Thread(target=self._work, daemon=True).start()
+
+    def _work(self):
+        error = None
+        try:
+            core.scan_library()
+        except Exception as err:  # keep the window alive whatever happens
+            error = str(err)
+        GLib.idle_add(self._finished, error)
+
+    def _finished(self, error):
+        self.running = False
+        self.error = error
+        self.notify()
+        return False
+
+    def notify(self):
+        for listener in list(self.listeners):
+            listener()
+
+
+# ---------- the terminal window ----------
+
+class TerminalWindow(Gtk.ApplicationWindow):
+    def __init__(self, app, workdir=None, command=None):
+        super().__init__(application=app, title=core.APP)
+        self.app = app
+        self.set_default_size(960, 580)
+        self.set_icon_name("utilities-terminal")
+
+        self.term = Vte.Terminal()
+        self.term.set_scrollback_lines(10000)
+        self.term.set_hexpand(True)
+        self.term.set_vexpand(True)
+        self.set_child(self.term)
+
+        self.title_label = Gtk.Label(label=core.APP)
+        self.title_label.add_css_class("title")
+        self.subtitle_label = Gtk.Label()
+        self.subtitle_label.add_css_class("dim-label")
+        self.subtitle_label.set_visible(False)
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        title_box.set_valign(Gtk.Align.CENTER)
+        title_box.append(self.title_label)
+        title_box.append(self.subtitle_label)
+
+        header = Gtk.HeaderBar()
+        header.set_title_widget(title_box)
+        menu_button = Gtk.MenuButton()
+        menu_button.set_icon_name("open-menu-symbolic")
+        menu_button.set_tooltip_text("Menu")
+        menu_button.set_menu_model(self.build_menu())
+        header.pack_end(menu_button)
+        paste = labeled_button("edit-paste-symbolic", "Paste", "Paste (Ctrl+Shift+V)")
+        paste.connect("clicked", lambda *_: self.paste())
+        copy = labeled_button("edit-copy-symbolic", "Copy", "Copy (Ctrl+Shift+C)")
+        copy.connect("clicked", lambda *_: self.copy())
+        header.pack_end(paste)
+        header.pack_end(copy)
+        self.set_titlebar(header)
+
+        self.add_window_actions()
+        keys = Gtk.EventControllerKey()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self.on_key)
+        self.add_controller(keys)
+
+        self.term.connect("child-exited", lambda *_: self.close())
+        try:
+            self.term.connect("window-title-changed", self.on_title_changed)
+        except TypeError:
+            pass  # newer VTE versions dropped this signal; the title just stays "Alias Maker"
+        self.connect("notify::is-active", self.on_active_changed)
+        self.connect("close-request", self.on_close_request)
+
+        app.scanner.listeners.append(self.on_scan_changed)
+        self.on_scan_changed()
+        self.spawn(workdir, command)
+        self.term.grab_focus()
+
+    def build_menu(self):
+        menu = Gio.Menu()
+        ours = Gio.Menu()
+        ours.append("Database", "win.database")
+        ours.append("Custom Commands", "win.custom-commands")
+        menu.append_section(None, ours)
+        sections = [
+            [("New Window", "win.new-window", "<Control><Shift>n"),
+             ("Copy", "win.copy", "<Control><Shift>c"),
+             ("Paste", "win.paste", "<Control><Shift>v")],
+            [("Full Screen Mode", "win.fullscreen", "F11"),
+             ("Enlarge Font", "win.zoom-in", "<Control>plus"),
+             ("Reset Font Size", "win.zoom-reset", "<Control><Alt>0"),
+             ("Shrink Font", "win.zoom-out", "<Control>minus")],
+            [("About Alias Maker", "win.about", None)],
+        ]
+        for entries in sections:
+            section = Gio.Menu()
+            for label, action, accel in entries:
+                item = Gio.MenuItem.new(label, action)
+                if accel:
+                    item.set_attribute_value("accel", GLib.Variant("s", accel))
+                section.append_item(item)
+            menu.append_section(None, section)
+        return menu
+
+    def add_window_actions(self):
+        actions = {
+            "database": lambda: self.app.show_database(self),
+            "custom-commands": lambda: self.app.show_custom(self),
+            "new-window": self.app.new_window,
+            "copy": self.copy,
+            "paste": self.paste,
+            "fullscreen": self.toggle_fullscreen,
+            "zoom-in": lambda: self.zoom(1.1),
+            "zoom-out": lambda: self.zoom(1 / 1.1),
+            "zoom-reset": lambda: self.zoom(None),
+            "about": self.show_about,
+        }
+        for name, callback in actions.items():
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", lambda _a, _p, cb=callback: cb())
+            self.add_action(action)
+
+    # --- the shell inside ---
+
+    def spawn(self, workdir, command):
+        shell = user_shell()
+        if command and len(command) == 1 and " " in command[0]:
+            argv = [shell, "-c", command[0]]
+        else:
+            argv = command or [shell]
+        env = dict(os.environ)
+        env["PATH"] = SRC_DIR + os.pathsep + env.get("PATH", "")  # doit always works in here
+        env["ALIASMAKER"] = "1"
+        envv = [f"{key}={value}" for key, value in env.items()]
+        cwd = workdir if workdir and os.path.isdir(workdir) else os.path.expanduser("~")
+        args = [Vte.PtyFlags.DEFAULT, cwd, argv, envv, GLib.SpawnFlags.SEARCH_PATH,
+                None, None, -1, None, None, None]
+        try:
+            self.term.spawn_async(*args)
+        except TypeError:
+            del args[6]  # older PyGObject: no separate child-setup data argument
+            self.term.spawn_async(*args)
+
+    def type_into_terminal(self, text, run=False):
+        """Put text at the prompt. With run=True, clear the line first and press Enter."""
+        data = (("\x15" + text + "\n") if run else text).encode()
+        try:
+            self.term.feed_child(data)
+        except TypeError:
+            self.term.feed_child(data.decode(), len(data))
+        self.present()
+        self.term.grab_focus()
+
+    # --- menu actions ---
+
+    def copy(self):
+        self.term.copy_clipboard_format(Vte.Format.TEXT)
+
+    def paste(self):
+        self.term.paste_clipboard()
+
+    def toggle_fullscreen(self):
+        if self.is_fullscreen():
+            self.unfullscreen()
+        else:
+            self.fullscreen()
+
+    def zoom(self, factor):
+        scale = 1.0 if factor is None else self.term.get_font_scale() * factor
+        self.term.set_font_scale(max(0.4, min(scale, 4.0)))
+
+    def show_about(self):
+        about = Gtk.AboutDialog(transient_for=self, modal=True)
+        about.set_program_name(core.APP)
+        about.set_version(core.VERSION)
+        about.set_comments("A terminal that makes Linux commands easier: a database of the "
+                           "programs on your PC, and your own custom commands.")
+        about.set_license_type(Gtk.License.APACHE_2_0)
+        about.set_logo_icon_name("utilities-terminal")
+        about.present()
+
+    def on_key(self, _controller, keyval, _keycode, state):
+        mods = state & Gtk.accelerator_get_default_mod_mask()
+        control = Gdk.ModifierType.CONTROL_MASK
+        shift = Gdk.ModifierType.SHIFT_MASK
+        alt = Gdk.ModifierType.ALT_MASK
+        name = Gdk.keyval_name(Gdk.keyval_to_lower(keyval)) or ""
+        if keyval == Gdk.KEY_F11 and not mods:
+            self.toggle_fullscreen()
+            return True
+        if mods == control | shift and name in ("c", "v", "n"):
+            {"c": self.copy, "v": self.paste, "n": self.app.new_window}[name]()
+            return True
+        if mods & control and not mods & alt:
+            if name in ("plus", "equal", "kp_add"):
+                self.zoom(1.1)
+                return True
+            if name in ("minus", "underscore", "kp_subtract"):
+                self.zoom(1 / 1.1)
+                return True
+        if mods == control | alt and name in ("0", "kp_0"):
+            self.zoom(None)
+            return True
+        return False
+
+    # --- window state ---
+
+    def on_title_changed(self, *_):
+        try:
+            title = self.term.get_window_title()
+        except (AttributeError, TypeError):
+            title = None
+        self.title_label.set_label(title or core.APP)
+        self.set_title(f"{title} — {core.APP}" if title else core.APP)
+
+    def on_active_changed(self, *_):
+        if self.is_active():
+            self.app.last_terminal = self
+
+    def on_scan_changed(self):
+        scanner = self.app.scanner
+        if scanner.running:
+            self.show_subtitle("Scanning your installed software for the Database…")
+        elif scanner.error:
+            self.show_subtitle("The scan didn't finish. Try Rescan in the Database.", seconds=8)
+        elif self.subtitle_label.get_visible():
+            library = core.read_json(core.library_path(), None) or {}
+            count = len(library.get("programs", []))
+            self.show_subtitle(f"Database ready: {count} programs", seconds=5)
+
+    def show_subtitle(self, text, seconds=None):
+        self.subtitle_label.set_label(text)
+        self.subtitle_label.set_visible(True)
+        if seconds:
+            def hide():
+                if not self.app.scanner.running:
+                    self.subtitle_label.set_visible(False)
+                return False
+            GLib.timeout_add_seconds(seconds, hide)
+
+    def on_close_request(self, *_):
+        if self.on_scan_changed in self.app.scanner.listeners:
+            self.app.scanner.listeners.remove(self.on_scan_changed)
+        self.app.terminal_closed(self)
+        return False
+
+
+# ---------- Database ----------
+
+class DatabaseWindow(Gtk.Window):
+    def __init__(self, app):
+        super().__init__(title=f"Database — {core.APP}")
+        self.app = app
+        self.programs = []
+        self.shown = []
+        self.has_manuals = True
+        self.set_default_size(780, 540)
+        self.set_hide_on_close(True)
+
+        layout = padded_box()
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.search = Gtk.SearchEntry()
+        self.search.set_placeholder_text("Search by what it does: drives, wifi, battery…")
+        self.search.set_hexpand(True)
+        self.search.connect("search-changed", lambda *_: self.refresh())
+        self.rescan_button = Gtk.Button(label="Rescan")
+        self.rescan_button.set_tooltip_text("Look at what's installed again")
+        self.rescan_button.connect("clicked", lambda *_: self.app.scanner.start())
+        top.append(self.search)
+        top.append(self.rescan_button)
+        layout.append(top)
+        self.status = text_label("", "dim-label")
+        layout.append(self.status)
+
+        self.stack = Gtk.Stack()
+        self.stack.set_vexpand(True)
+        empty = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        empty.set_valign(Gtk.Align.CENTER)
+        empty.set_halign(Gtk.Align.CENTER)
+        empty_label = Gtk.Label(label="The database is empty.\nIt fills up after Alias Maker scans "
+                                      "your installed software.")
+        empty_label.set_justify(Gtk.Justification.CENTER)
+        empty.append(empty_label)
+        scan_now = Gtk.Button(label="Scan My Installed Software")
+        scan_now.add_css_class("suggested-action")
+        scan_now.connect("clicked", lambda *_: self.app.scanner.start())
+        empty.append(scan_now)
+        self.stack.add_named(empty, "empty")
+        scanning = Gtk.Label(label="Scanning your installed software…\nThis takes a few seconds.")
+        scanning.set_justify(Gtk.Justification.CENTER)
+        self.stack.add_named(scanning, "scanning")
+        self.stack.add_named(Gtk.Label(label="Nothing matched. Try different or fewer words."),
+                             "nomatch")
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.listbox.connect("row-selected", lambda *_: self.update_buttons())
+        self.listbox.connect("row-activated", lambda *_: self.make_custom())
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_child(self.listbox)
+        self.stack.add_named(scroller, "list")
+        layout.append(self.stack)
+        self.footer = text_label("", "dim-label")
+        layout.append(self.footer)
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        buttons.set_halign(Gtk.Align.END)
+        self.type_button = Gtk.Button(label="Type Into Terminal")
+        self.type_button.connect("clicked", lambda *_: self.type_program())
+        self.manual_button = Gtk.Button(label="Read Manual")
+        self.manual_button.connect("clicked", lambda *_: self.read_manual())
+        self.custom_button = Gtk.Button(label="Make Custom Command…")
+        self.custom_button.add_css_class("suggested-action")
+        self.custom_button.connect("clicked", lambda *_: self.make_custom())
+        for button in (self.type_button, self.manual_button, self.custom_button):
+            buttons.append(button)
+        layout.append(buttons)
+        self.set_child(layout)
+
+        app.scanner.listeners.append(self.reload)
+        self.reload()
+
+    def reload(self):
+        if self.app.scanner.running:
+            self.stack.set_visible_child_name("scanning")
+            self.status.set_label("Scanning…")
+            self.footer.set_label("")
+            self.rescan_button.set_sensitive(False)
+            self.update_buttons()
+            return
+        self.rescan_button.set_sensitive(True)
+        library = core.read_json(core.library_path(), None)
+        if not library or not library.get("programs"):
+            self.programs = []
+            self.stack.set_visible_child_name("empty")
+            note = f"The last scan didn't finish: {self.app.scanner.error}" if self.app.scanner.error else ""
+            self.status.set_label(note)
+            self.footer.set_label("")
+            self.update_buttons()
+            return
+        self.programs = library["programs"]
+        self.has_manuals = library.get("has_manuals", True)
+        status = f"{len(self.programs)} programs on this PC · last scanned {scanned_when(library)}"
+        if not self.has_manuals:
+            status += ("\nDescriptions are thin because manual pages aren't installed. "
+                       "Install them with: sudo pacman -S man-db man-pages, then Rescan.")
+        self.status.set_label(status)
+        self.refresh()
+
+    def refresh(self):
+        if not self.programs:
+            return
+        query = self.search.get_text().strip()
+        if query:
+            total, self.shown = core.search_library(self.programs, query, limit=MAX_ROWS)
+        else:
+            total, self.shown = len(self.programs), self.programs[:MAX_ROWS]
+        clear_list(self.listbox)
+        for program in self.shown:
+            self.listbox.append(two_line_row(program["name"],
+                                             program["description"] or "(no description)"))
+        self.stack.set_visible_child_name("list" if self.shown else "nomatch")
+        more = total - len(self.shown)
+        self.footer.set_label(f"Showing {len(self.shown)} of {total}. Type more words to narrow it down."
+                              if more > 0 else "")
+        self.update_buttons()
+
+    def selected(self):
+        row = self.listbox.get_selected_row()
+        if row is None or self.stack.get_visible_child_name() != "list":
+            return None
+        index = row.get_index()
+        return self.shown[index] if 0 <= index < len(self.shown) else None
+
+    def update_buttons(self):
+        chosen = self.selected() is not None
+        for button in (self.type_button, self.manual_button, self.custom_button):
+            button.set_sensitive(chosen)
+
+    def make_custom(self):
+        program = self.selected()
+        if program:
+            self.app.show_add_dialog(self, command=program["name"] + " ")
+
+    def read_manual(self):
+        program = self.selected()
+        if program:
+            self.app.terminal().type_into_terminal(f"man {shlex.quote(program['name'])}", run=True)
+
+    def type_program(self):
+        program = self.selected()
+        if program:
+            self.app.terminal().type_into_terminal(program["name"] + " ")
+
+
+# ---------- Custom Commands ----------
+
+class CustomWindow(Gtk.Window):
+    def __init__(self, app):
+        super().__init__(title=f"Custom Commands — {core.APP}")
+        self.app = app
+        self.custom = []
+        self.remove_armed = None
+        self.set_default_size(680, 460)
+        self.set_hide_on_close(True)
+
+        layout = padded_box()
+        layout.append(text_label("Type these in the terminal after doit. For example, if you made "
+                                 "\"just check my drives\", type: doit just check my drives"))
+        self.stack = Gtk.Stack()
+        self.stack.set_vexpand(True)
+        empty = Gtk.Label(label="No custom commands yet.\nClick Add, or pick a program in the Database "
+                                "and choose Make Custom Command.")
+        empty.set_justify(Gtk.Justification.CENTER)
+        self.stack.add_named(empty, "empty")
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.listbox.connect("row-selected", lambda *_: self.update_buttons())
+        self.listbox.connect("row-activated", lambda *_: self.run_selected())
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_child(self.listbox)
+        self.stack.add_named(scroller, "list")
+        layout.append(self.stack)
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        buttons.set_halign(Gtk.Align.END)
+        self.remove_button = Gtk.Button(label="Remove")
+        self.remove_button.connect("clicked", lambda *_: self.remove_selected())
+        self.run_button = Gtk.Button(label="Run in Terminal")
+        self.run_button.connect("clicked", lambda *_: self.run_selected())
+        add = Gtk.Button(label="Add…")
+        add.add_css_class("suggested-action")
+        add.connect("clicked", lambda *_: self.app.show_add_dialog(self))
+        for button in (self.remove_button, self.run_button, add):
+            buttons.append(button)
+        layout.append(buttons)
+        self.set_child(layout)
+        self.reload()
+
+    def reload(self):
+        self.custom = core.load_custom()
+        self.remove_armed = None
+        self.remove_button.set_label("Remove")
+        clear_list(self.listbox)
+        for custom in self.custom:
+            note = " · asks first" if custom.get("confirm") else ""
+            self.listbox.append(two_line_row(f"doit {custom['phrase']}",
+                                             f"runs: {custom['command']}{note}"))
+        self.stack.set_visible_child_name("list" if self.custom else "empty")
+        self.update_buttons()
+
+    def selected(self):
+        row = self.listbox.get_selected_row()
+        if row is None:
+            return None
+        index = row.get_index()
+        return self.custom[index] if 0 <= index < len(self.custom) else None
+
+    def update_buttons(self):
+        chosen = self.selected()
+        self.run_button.set_sensitive(chosen is not None)
+        self.remove_button.set_sensitive(chosen is not None)
+        if chosen is not self.remove_armed:
+            self.remove_armed = None
+            self.remove_button.set_label("Remove")
+
+    def run_selected(self):
+        custom = self.selected()
+        if custom:
+            self.app.terminal().type_into_terminal(f"doit {shlex.quote(custom['phrase'])}", run=True)
+
+    def remove_selected(self):
+        custom = self.selected()
+        if not custom:
+            return
+        if self.remove_armed is not custom:
+            self.remove_armed = custom  # first click arms, second click removes
+            self.remove_button.set_label("Click Again to Remove")
+            return
+        core.remove_custom_command(custom["phrase"])
+        self.reload()
+
+
+class AddDialog(Gtk.Window):
+    def __init__(self, app, parent, command=""):
+        super().__init__(title="Make a Custom Command", transient_for=parent, modal=True)
+        self.app = app
+        self.pending = None
+        self.set_default_size(520, -1)
+
+        layout = padded_box(spacing=6)
+        layout.append(text_label("What do you want to type? (after doit)"))
+        self.phrase = Gtk.Entry()
+        self.phrase.set_placeholder_text("for example: just check my drives")
+        layout.append(self.phrase)
+        layout.append(text_label("What should it run?"))
+        self.command = Gtk.Entry()
+        self.command.set_text(command)
+        self.command.set_placeholder_text("for example: lsblk -f")
+        layout.append(self.command)
+        if command:
+            layout.append(text_label("You can add options after the program's name, like -f.",
+                                     "dim-label"))
+        self.ask_first = Gtk.CheckButton(label="Ask before running it every time")
+        layout.append(self.ask_first)
+        self.message = text_label("")
+        self.message.set_visible(False)
+        layout.append(self.message)
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        buttons.set_halign(Gtk.Align.END)
+        buttons.set_margin_top(6)
+        cancel = Gtk.Button(label="Cancel")
+        cancel.connect("clicked", lambda *_: self.close())
+        save = Gtk.Button(label="Save")
+        save.add_css_class("suggested-action")
+        save.connect("clicked", lambda *_: self.save())
+        buttons.append(cancel)
+        buttons.append(save)
+        layout.append(buttons)
+        self.set_child(layout)
+
+        self.command.connect("changed", lambda *_: self.on_command_changed())
+        self.phrase.connect("activate", lambda *_: self.save())
+        self.command.connect("activate", lambda *_: self.save())
+        self.on_command_changed()
+        (self.phrase if command else self.command).grab_focus()
+
+    def on_command_changed(self):
+        uses_sudo = "sudo" in self.command.get_text().split()
+        if uses_sudo:
+            self.ask_first.set_active(True)
+        self.ask_first.set_sensitive(not uses_sudo)
+        self.pending = None
+
+    def say(self, text, kind):
+        for css in ("error", "warning"):
+            self.message.remove_css_class(css)
+        self.message.add_css_class(kind)
+        self.message.set_label(text)
+        self.message.set_visible(True)
+
+    def save(self):
+        phrase = self.phrase.get_text().strip()
+        command = self.command.get_text().strip()
+        if not command:
+            self.say("Type the command it should run.", "error")
+            return
+        norm = core.normalize(phrase)
+        custom_map = {core.normalize(c["phrase"]): c for c in core.load_custom()}
+        problem, detail = core.phrase_problem(norm, custom_map, self.app.phrase_map)
+        if problem == "empty":
+            self.say("Type the words you want to use.", "error")
+            return
+        if problem == "reserved":
+            self.say(f"\"{phrase}\" is one of {core.APP}'s own words. Pick something else.", "error")
+            return
+        if problem and self.pending != (norm, command):
+            self.pending = (norm, command)
+            if problem == "custom-clash":
+                self.say(f"You already use that phrase for: {detail}\nPress Save again to replace it.",
+                         "warning")
+            else:
+                self.say(f"That's already an easy command (it runs: {detail}).\n"
+                         "Press Save again to use it for yours instead.", "warning")
+            return
+        confirm = self.ask_first.get_active() or "sudo" in command.split()
+        core.save_custom_command(phrase, command, confirm)
+        self.close()
+        self.app.custom_changed()
+
+
+# ---------- the app ----------
+
+class AliasMakerApp(Gtk.Application):
+    def __init__(self, workdir, command):
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.NON_UNIQUE)
+        self.workdir = workdir
+        self.command = command
+        self.scanner = Scanner()
+        self.terminals = []
+        self.last_terminal = None
+        self.database_window = None
+        self.custom_window = None
+        try:
+            _, self.phrase_map = core.load_index(core.find_index())
+        except (OSError, ValueError, KeyError):
+            self.phrase_map = {}
+
+    def do_activate(self):
+        core.migrate_old_dirs()
+        self.new_window(self.workdir, self.command)
+        if not core.library_path().is_file():
+            self.scanner.start()  # first time Alias Maker takes over: fill the Database
+
+    def new_window(self, workdir=None, command=None):
+        window = TerminalWindow(self, workdir, command)
+        self.terminals.append(window)
+        self.last_terminal = window
+        window.present()
+        return window
+
+    def terminal(self):
+        """The terminal window to type into: the last one used, or a new one."""
+        if self.last_terminal in self.terminals:
+            return self.last_terminal
+        if self.terminals:
+            return self.terminals[-1]
+        return self.new_window()
+
+    def terminal_closed(self, window):
+        if window in self.terminals:
+            self.terminals.remove(window)
+        if not self.terminals:
+            self.quit()  # the Database and Custom Commands windows close with the last terminal
+
+    def show_database(self, parent):
+        if self.database_window is None:
+            self.database_window = DatabaseWindow(self)
+        self.database_window.set_transient_for(parent)
+        self.database_window.present()
+
+    def show_custom(self, parent):
+        if self.custom_window is None:
+            self.custom_window = CustomWindow(self)
+        self.custom_window.set_transient_for(parent)
+        self.custom_window.reload()
+        self.custom_window.present()
+
+    def show_add_dialog(self, parent, command=""):
+        AddDialog(self, parent, command).present()
+
+    def custom_changed(self):
+        self.show_custom(self.terminal())
+
+
+def main(argv):
+    workdir, command = parse_args(argv)
+    app = AliasMakerApp(workdir, command)
+    return app.run([sys.argv[0]])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

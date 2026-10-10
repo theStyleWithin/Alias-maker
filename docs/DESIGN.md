@@ -1,6 +1,17 @@
 # Alias Maker: design notes
 
-Alias Maker is a terminal wrapper: you type `doit` followed by plain words, and it runs the real Linux command. `doit` is only the prefix; the tool is called Alias Maker. It was split out of [Doit-os](https://github.com/theStyleWithin/Doit-os) so the tool can be built and proven on a regular CachyOS install first. If it's stable there, it becomes Do It OS's selling point; if the distro never ships, this tool still stands on its own.
+Alias Maker is its own terminal app (`aliasmaker`): a window like Konsole that runs the user's normal shell, with **Database** and **Custom Commands** added to its ☰ menu. Inside it, you type `doit` followed by plain words and it runs the real Linux command. `doit` is only the prefix; the tool is called Alias Maker.
+
+## How it's built
+
+| File | What it is |
+|---|---|
+| `src/aliasmaker` | The terminal window: GTK 4 with the VTE terminal widget (the engine many Linux terminals use). Needs `vte4` and `python-gobject`. |
+| `src/doit` | The command typed inside the terminal. A thin launcher for the engine. |
+| `src/aliasmaker_core.py` | The shared engine: easy commands, custom commands, the scan, search, logging and settings. Both of the above use it, so a phrase saved in the window works with `doit` straight away. |
+| `data/commands.json` | The easy commands. |
+
+The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias Maker even if it isn't installed anywhere else. It was split out of [Doit-os](https://github.com/theStyleWithin/Doit-os) so the tool can be built and proven on a regular CachyOS install first. If it's stable there, it becomes Do It OS's selling point; if the distro never ships, this tool still stands on its own.
 
 ## Status
 
@@ -13,13 +24,15 @@ Alias Maker is a terminal wrapper: you type `doit` followed by plain words, and 
 | Yes-word settings (easy / strict / custom) | Built |
 | Custom commands (user picks their own phrases) | Built |
 | Database: scan of every program on this PC, with search | Built |
-| In-terminal menu (`doit menu`) | Built |
+| Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built, untested on real hardware |
+| Konsole-style menu items and shortcuts (New Window, Copy, Paste, Full Screen, font size) | Built, untested on real hardware |
+| Text menu (`doit menu`) | Built, kept as a backup outside the window |
+| Tabs, split view, find, profiles | Not yet |
 | Plain-English explanation for every scanned program | Stretch goal |
-| Window app with a clickable ☰ menu | Later (planned as the help app) |
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far (46 automated tests plus real-terminal runs), not yet on CachyOS or the fish shell. The scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools.
+Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 49 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (40 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
 
 ## Wrapper
 
@@ -44,25 +57,43 @@ Piping a remote script into a shell trusts that URL on every run, so the URL is 
 - **Command logging:** asked once, the first time `doit` runs a command. Saying no still translates commands; it only skips the log file. `doit logging on|off` changes it later, and logging starts from when it's turned on. `doit show me what you did` shows the history.
 - **Yes wording:** by default both `y` and `yes` work. `doit answer strict` requires the full word; `doit answer word <word>` sets a custom one.
 
-## Menu
+## The window and its menu
 
-`doit menu`, or typing `menu` at the "Do what? I am waiting..." prompt, opens a numbered menu. Konsole's own ☰ menu can't be extended by a terminal program, so the menu lives inside the terminal for now.
+Opening Alias Maker starts the user's login shell (fish on CachyOS) in a terminal, like Konsole. It understands `--workdir DIR` and `-e COMMAND`, the options KDE passes to a default terminal, and installs an app-launcher entry in the TerminalEmulator category so it can be picked as the default terminal.
+
+The ☰ menu, top to bottom:
 
 ```
-1) Database
-   1) Easy commands (plain English)    browse, run, or make your own phrase for one
-   2) Every command on this PC         search, read the manual, or make a custom command
-   3) Custom commands (yours)          make new, run, remove
-   4) Rescan this PC
-2) Settings                            log on/off, yes word
-3) History
+Database                 every program on this PC
+Custom Commands          your own phrases
+──────────
+New Window               Ctrl+Shift+N
+Copy                     Ctrl+Shift+C
+Paste                    Ctrl+Shift+V
+──────────
+Full Screen Mode         F11
+Enlarge Font             Ctrl++
+Reset Font Size          Ctrl+Alt+0
+Shrink Font              Ctrl+-
+──────────
+About Alias Maker
 ```
 
-Enter goes back a level; Ctrl-D leaves the menu entirely.
+Copy and Paste buttons also sit in the title bar, as in Konsole. Plain Ctrl+C still goes to the shell (it stops the running program).
+
+**Database window:** a search box, a Rescan button, and the list of programs with their descriptions. Before the first scan it shows an empty state with a "Scan My Installed Software" button. For a picked program: **Make Custom Command** (pre-fills its name so options can be added), **Read Manual** (runs `man <name>` in the terminal), **Type Into Terminal** (types the name at the prompt without running it). Shows up to 300 programs at a time; typing more words narrows it.
+
+**Custom Commands window:** the list of phrases and what they run. **Add**, **Run in Terminal** (types `doit '<phrase>'` and presses Enter; the quotes keep fish and bash from treating `*`, `$` and the like specially), and **Remove** (click twice to confirm).
+
+**Add dialog:** what to type, what it runs, and "Ask before running it every time" (forced on for `sudo` commands). Alias Maker's own words are refused; a phrase that's already taken shows what it runs now and needs a second Save to replace it.
+
+**When the scan happens:** the first time the window opens (in the background, with "Scanning your installed software for the Database…" under the title), on Rescan, and after Alias Maker's own installs. `doit` never scans on its own; `doit rescan` scans on request.
+
+The text menu (`doit menu`) still exists as a backup for terminals other than Alias Maker.
 
 ## Database: every program on this PC
 
-On install (and on first use, and with `doit rescan`), Alias Maker builds a list of every program the terminal can run, so it only lists commands that will actually work on this machine.
+The first time the Alias Maker window opens (and on Rescan, or `doit rescan`), it builds a list of every program the terminal can run, so it only lists commands that will actually work on this machine.
 
 1. **Programs:** every runnable file in the folders listed in `PATH`.
 2. **Descriptions from manuals:** each program's one-line summary from its manual page, via `whatis` (sections 1, 8 and 6 only, so C library functions with the same name are skipped).
@@ -76,7 +107,7 @@ It only reads; it never runs the programs (asking each one for `--help` would me
 
 The user picks their own phrase for any command, including profane or silly ones, with no content restrictions. `doit <their phrase>` then runs the real command, still showing it first.
 
-- Made with `doit add` or from the menu. The command can come from a search of this PC (with options added, like `lsblk` + `-f`), from the easy commands, or typed by hand.
+- Made from the window's Custom Commands or Database, or with `doit add`. The command can come from a search of this PC (with options added, like `lsblk` + `-f`), from the easy commands, or typed by hand.
 - Saved in `~/.config/alias-maker/custom.json`, separate from the shipped index, so an index update never wipes them.
 - Saved as phrases inside Alias Maker, not as symlinks: a symlink can't carry options like `-f`, and a phrase with spaces can't be a single command name. Symlinks stay for one-word renames of a program (not built yet).
 - Alias Maker's own words (`menu`, `list`, `search ...`, `forget ...` and so on) are reserved.

@@ -1,9 +1,24 @@
 # Alias-maker
 a simplified terminal wrapper. A terminal wrapper that takes over your terminal it carries over an existing database of commands points the user to what does what allows the user to easily seemlessly revise the command to their preferred terminogy that they understand to get the fucking job done! 
 
-## Try it
+## What it is
 
-Works on a regular CachyOS install. No root needed to install.
+Alias Maker is its own terminal app, a window like Konsole running your normal shell. Its ☰ menu adds two entries:
+
+- **Database:** every program installed on your PC, searchable by what it does ("drives", "wifi", "battery"). It's empty until Alias Maker scans your installed software, which happens the first time you open it. Pick a program to read its manual, type it into the terminal, or make a custom command for it.
+- **Custom Commands:** your own phrases for any command, with no word restrictions. Make `just check my fucking drives` run `lsblk -f`, then type `doit just check my fucking drives` in the terminal. It always shows the real command first.
+
+The rest of the menu works like Konsole's: New Window, Copy, Paste, Full Screen, and font size, with the same shortcuts.
+
+## Install
+
+Works on a regular CachyOS install. First, the two packages the window needs (from CachyOS's official repos), plus manual pages so the Database has good descriptions:
+
+```
+sudo pacman -S vte4 python-gobject man-db man-pages
+```
+
+Then:
 
 ```
 git clone https://github.com/theStyleWithin/Alias-maker.git
@@ -13,45 +28,30 @@ cd Alias-maker
 
 The repo is private, so `git clone` will ask you to sign in to GitHub. You can also use **Code → Download ZIP** on the repo page and unzip it.
 
-Practice safely first. With `--dry-run`, doit shows what it would run without running anything:
+Open **Alias Maker** from your app launcher (or type `aliasmaker`). To make it your default terminal: System Settings → Default Applications → Terminal emulator → Alias Maker.
 
-```
-doit --dry-run
-```
+## Inside the terminal
 
-Then use it for real. Everything starts with `doit`:
+Everything you type normally still works. `doit` adds plain-English commands:
 
 | Type | What happens |
 |---|---|
 | `doit` | Asks "Do what? I am waiting..." and waits for you |
-| `doit menu` | The menu: database, custom commands, settings, history |
 | `doit turn off` | Shuts down (no question asked) |
 | `doit install brave` | Shows where the installer comes from, then asks before running |
-| `doit search drives` | Finds programs on this PC by what they do |
-| `doit add` | Make your own phrase for any command |
-| `doit my commands` | The phrases you've made |
-| `doit forget <phrase>` | Remove one of your phrases |
+| `doit <your phrase>` | Runs one of your custom commands |
+| `doit search drives` | Searches the Database from the terminal |
 | `doit list` | The easy commands |
-| `doit rescan` | Look at what's installed again (after installing new software) |
 | `doit show me what you did` | Your command history, if logging is on |
 | `doit logging on` / `off` | Turn the command log on or off |
 | `doit answer strict` | Saying yes needs the full word "yes" (`doit answer easy` goes back to y/yes) |
 | `doit answer word <word>` | Pick your own yes word |
 
-### Custom commands
+`doit add`, `doit my commands`, `doit forget <phrase>`, `doit rescan` and a text menu (`doit menu`) also exist as backups for when you're not in the Alias Maker window.
 
-Name any command whatever you like, with no restrictions. For example, `doit add`, then pick `lsblk` from the search, add `-f`, and call it `just check my fucking drives`. From then on, `doit just check my fucking drives` runs `lsblk -f`, and it still shows you the real command first.
+Practice safely: `doit --dry-run <phrase>` shows what would run without running it.
 
-### The database
-
-When you install it, Alias Maker looks at every program on your PC and takes each one's short description from its manual. It only reads; it never runs them. Descriptions are much better with manual pages installed:
-
-```
-sudo pacman -S man-db man-pages
-doit rescan
-```
-
-To remove it: `rm ~/.local/bin/doit`. Your settings and custom commands live in `~/.config/alias-maker`, and the program list and log in `~/.local/share/alias-maker`.
+To remove it: `rm ~/.local/bin/aliasmaker ~/.local/bin/doit ~/.local/share/applications/aliasmaker.desktop`. Your settings and custom commands live in `~/.config/alias-maker`, and the Database and log in `~/.local/share/alias-maker`.
 
 Design notes and what's next: [docs/DESIGN.md](docs/DESIGN.md). Part of the [Do It OS](https://github.com/theStyleWithin/Doit-os) project.
 
