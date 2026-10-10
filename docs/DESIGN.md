@@ -35,7 +35,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 |---|---|
 | Wrapper: plain-English phrases run real commands | Built (`src/doit`) |
 | Six ready-made commands turned into examples (no built-in phrases) | Built |
-| One-word commands become real fish commands (Alias Maker's conf.d file), with naming help | Built; untested with real fish |
+| One-word commands become real fish commands (Alias Maker's conf.d file), with naming help; they work at once in open Alias Maker windows | Built; the fish side tested with real fish 4.0 |
 | "Do what? I am waiting..." prompt | Built |
 | Third-party install flow (show source URL, ask first) | Built |
 | Command logging (asked once, toggle later, history) | Built |
@@ -46,7 +46,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Tables open in their own window and build up gradually | Built, untested on real hardware |
 | Edit Custom Commands directly in the table (Database stays read-only) | Built, untested on real hardware |
 | Title and prompt say Let'sdostuff~ instead of fish ~ (fish only) | Built, untested on real hardware |
-| /clippy lookups: CachyOS wiki, Arch Wiki (best effort), manual pages | Built; tested against a stand-in wiki, untested against the real sites and fish |
+| /clippy lookups: CachyOS wiki, Arch Wiki (best effort), manual pages | Built; tested against a stand-in wiki and with real fish 4.0, untested against the real sites |
 | Database: scan of every program on this PC, with search | Built |
 | Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built, untested on real hardware |
 | Konsole-style menu items and shortcuts (New Window, Copy, Paste, Full Screen, font size) | Built, untested on real hardware |
@@ -96,9 +96,9 @@ Opening Alias Maker starts the user's login shell (fish on CachyOS) in a termina
 
 Everything else about fish (settings, functions, right-hand prompt) is unchanged, and other terminals are unaffected. The name comes from `$ALIASMAKER_NAME`, which the window sets, so it could become a setting later. Other shells (bash, zsh) start as they are for now. The window reads the title through VTE's older `window-title-changed` signal or the newer `termprop-changed` one, whichever exists. Fish couldn't be run in the build sandbox, so the script was checked by hand.
 
-**The DOIT welcome.** Every Alias Maker window opens with a big block-letter DOIT (`src/shell/doit-logo.txt`) and the PC's info beside it, the way CachyOS shows its logo. `doit --welcome` makes it: with fastfetch installed (CachyOS ships it) it runs `fastfetch --logo doit-logo.txt --logo-type file --logo-color-1 96`, so the logo is swapped and fastfetch's full info stays; without fastfetch, or if it fails, Alias Maker prints its own info next to DOIT: user@host, OS, kernel, uptime, shell, terminal, CPU, memory and disk, read from `/etc/os-release` and `/proc`. With fish, the welcome comes from `fish_greeting`; with other shells, the window writes it before starting the shell, so it's shown once either way. Konsole keeps the CachyOS logo.
+**The DOIT welcome.** Every Alias Maker window opens with a big block-letter DOIT (`src/shell/doit-logo.txt`) and the PC's info beside it, the way CachyOS shows its logo. `doit --welcome` makes it: with fastfetch installed (CachyOS ships it) it runs `fastfetch --logo doit-logo.txt --logo-type file --logo-color-1 96`, so the logo is swapped and fastfetch's full info stays. Inside the window it also passes `--config` with Alias Maker's own module list (`fastfetch-welcome.jsonc` in the data folder) whose Terminal line says `aliasmaker`: the app is Python underneath, so fastfetch would otherwise say `python3`, and newer fastfetch only takes that through a config file. `doit --welcome` replaces itself with fastfetch so fastfetch sees fish as its parent and reports the right shell. The window also names its own process `aliasmaker` (for btop, htop and ps) and sets `TERM_PROGRAM=aliasmaker`; without fastfetch, or if it fails, Alias Maker prints its own info next to DOIT: user@host, OS, kernel, uptime, shell, terminal, CPU, memory and disk, read from `/etc/os-release` and `/proc`. With fish, the welcome comes from `fish_greeting`; with other shells, the window writes it before starting the shell, so it's shown once either way. Konsole keeps the CachyOS logo.
 
-**/clippy.** Typing `/clippy <topic>` in the Alias Maker window looks the topic up and never runs it. Fish doesn't know commands starting with `/`, so it calls `fish_command_not_found`; the fish script catches `/clippy` there and runs `doit clippy <topic>`, and passes anything else to the handler that was there before (CachyOS's or fish's own). The slash word is one setting (`HELPER_NAME`).
+**/clippy.** Typing `/clippy <topic>` in the Alias Maker window looks the topic up and never runs it. `/clippy` is a fish abbreviation (`abbr --position command --regex '^/clippy$'`, fish 3.6 and newer): it turns into `doit clippy` when space or Enter is pressed, and fish colors it as a known command instead of red. As a backup for older fish, `fish_command_not_found` also catches `/clippy` and runs `doit clippy <topic>`, and passes anything else to the handler that was there before (CachyOS's or fish's own). Fish function names can't contain `/`, so a function isn't possible. The slash word is one setting (`HELPER_NAME`).
 
 What it searches:
 
@@ -110,11 +110,11 @@ Words are matched forgivingly: endings are trimmed (chrooting → chroot, mounte
 
 The name `/clippy` was the author's choice. Microsoft owns the Clippy character and trademark; the command uses only the word, with no Clippy artwork.
 
-The ☰ menu, top to bottom:
+The ☰ menu, top to bottom. Custom Commands opens to the side of the menu, like Konsole's submenus (a `Gtk.PopoverMenu` with the NESTED flag), instead of GTK's default of sliding the whole menu over:
 
 ```
 Database                 every program on this PC
-Custom Commands  ▸       only appears once the user has made a command
+Custom Commands  ▸       only appears once the user has made a command; opens to the side
     Custom Command List
     Create Command
     Edit Command
@@ -181,7 +181,7 @@ The first time the Alias Maker window opens (and on Rescan in the Database windo
 
 It only reads; it never runs the programs (asking each one for `--help` would mean launching thousands of programs). Without manual pages installed (`sudo pacman -S man-db man-pages`), descriptions come only from packages and are vaguer. The list is saved to `~/.local/share/alias-maker/library.json` and refreshed after Alias Maker's own installs.
 
-**Search** matches every word against names, descriptions and package names. Exact name matches come first. It understands plurals and a small set of plain words: for example "drives" also searches for disk, block and partition, so `lsblk` ("list block devices") turns up.
+**Search** matches every word against names, descriptions and package names, and ranks the results. Each word scores a program: the name is the word (best); it's one of the usual picks for that word (`COMMON_PICKS`: "drives" → lsblk, df, findmnt, blkid…; "wifi" → nmcli, nmtui, iwctl…); the name starts with or contains it; the description says it; and last, only a synonym matched. Best total first, then shorter names. It understands plurals and a small set of plain words: for example "drives" also searches for disk, block and partition. A new search goes back to best-first even if a column was clicked before.
 
 ## Real terminal commands (the fish file)
 
@@ -193,6 +193,7 @@ On CachyOS, shortcuts are normally made by hand: `~/.config/fish/config.fish` lo
 - **Names with spaces** can't be terminal commands (the first word would be taken as the program), so they work with `doit` in front only. `doit create` and the Create Command window offer one-word versions: a shorter one (first and last meaningful word, filler like "just" and "my" dropped: `check-drives`) and the full phrase with dashes (`just-check-my-fucking-drives`), plus a shorter `doit` phrase or keeping it as typed.
 - **Names already taken** are never written, so nothing real is hidden: programs on `PATH`, fish's own commands and keywords, names defined in CachyOS's fish config or the user's `config.fish`, and functions in `~/.config/fish/functions/`. Those commands work as `doit <name>`. (Fish loads `conf.d` before `config.fish`, so CachyOS's aliases would win anyway.)
 - Deleting a command removes its function from the file; the program it pointed to is untouched.
+- **Works right away in Alias Maker.** The file ends with `set -g __aliasmaker_shortcut_names ...`. Before each prompt, the window's fish script checks whether the file changed and, if so, erases the old names and loads it again, so a command made, renamed or deleted (in the window or with `doit create`) takes effect in every open Alias Maker window. If the command is typed at a prompt that was already waiting, the not-found handler reloads and runs it. Other terminals pick it up in a new window, and `doit create` says which applies.
 - The Custom Commands table shows this in a "Works on its own" column (the name, or "doit only").
 
 `doit create` now asks "What command do you want it to point to?" first (type it, or press Enter to search this PC or start from an example), then "Name the new command:".

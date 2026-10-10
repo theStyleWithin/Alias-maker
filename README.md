@@ -15,7 +15,7 @@ Create Command
 Terminal Settings
 ```
 
-- **Database:** every program installed on your PC in a spreadsheet-style table (Command, What it does, Package, Location), searchable by what it does ("drives", "wifi", "battery"). Click a column title to sort by it. It's empty until Alias Maker scans your installed software, which happens the first time you open it. Pick a program to read its manual, type it into the terminal, or make a custom command for it. It opens in its own window, the table builds up row by row, and it's read-only.
+- **Database:** every program installed on your PC in a spreadsheet-style table (Command, What it does, Package, Location), searchable by what it does ("drives", "wifi", "battery"), with the best match on top (search "drives" and `lsblk` comes first). Click a column title to sort by it. It's empty until Alias Maker scans your installed software, which happens the first time you open it. Pick a program to read its manual, type it into the terminal, or make a custom command for it. It opens in its own window, the table builds up row by row, and it's read-only.
 - **Create Command:** make your own phrase for any command, with no word restrictions. Make `just check my fucking drives` run `lsblk -f`, then type `doit just check my fucking drives` in the terminal. It always shows the real command first.
 - **Custom Commands:** appears once you've made your first command. It's a second database, in the same kind of table (You type, It runs, Asks first, Made on), that lists only the commands you made, with Create, Edit and Delete. It's the one table you can edit directly: click a cell and type (Enter saves, Esc undoes), or tick and untick Asks first.
 
@@ -38,15 +38,15 @@ Every Alias Maker window opens with a big DOIT and your PC's info next to it (fr
 ██║  ██║ ██║   ██║ ██║    ██║      CPU: …
 ██║  ██║ ██║   ██║ ██║    ██║      Memory: …
 ██████╔╝ ╚██████╔╝ ██║    ██║      Shell: fish
-╚═════╝   ╚═════╝  ╚═╝    ╚═╝      Terminal: Alias Maker
+╚═════╝   ╚═════╝  ╚═╝    ╚═╝      Terminal: aliasmaker
 ```
 
 The folder after it still tells you where you are (`~` is your home folder), and the ❯ turns red when the last command failed. It's still the same fish underneath, with all your settings, and only inside Alias Maker.
 
-**/clippy, the helper:** type `/clippy` and what you're wondering about, and it looks it up instead of running anything:
+**/clippy, the helper:** type `/clippy` and what you're wondering about, and it looks it up instead of running anything. As soon as you press space, `/clippy` turns into `doit clippy` (so it's never shown in red as an unknown command):
 
 ```
-Let'sdostuff~ ❯ /clippy chrooting
+Let'sdostuff~ ❯ doit clippy chrooting
 /clippy: Here's what I found about "chrooting". (I'm only looking it up, not running anything.)
 
 CachyOS wiki
@@ -128,7 +128,7 @@ on its own (it would look for a program called "just"). Pick one:
 - **Names with spaces** work with `doit` in front.
 - **Names that are already taken** (a program like `ls`, a fish command like `cd`, or one of CachyOS's shortcuts like `update`) work as `doit <name>` only, so the real one is never hidden.
 
-Shortcuts still go through Alias Maker: they show the real command first, ask before running when set to, and are logged. Extra words are passed along, so `check-drives /dev/sda` runs `lsblk -f /dev/sda`. Open a new terminal window after making a command to use it on its own.
+Shortcuts still go through Alias Maker: they show the real command first, ask before running when set to, and are logged. Extra words are passed along, so `check-drives /dev/sda` runs `lsblk -f /dev/sda`. In Alias Maker, a new one-word command works right away in every open window. Other terminals (like Konsole) pick it up in a new window.
 
 ### Example commands you can make
 

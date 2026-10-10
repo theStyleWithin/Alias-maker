@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}
@@ -428,6 +428,10 @@ def write_fish_shortcuts(custom=None):
                   f"    {fish_quote(str(doit_path()))} --alias {fish_quote(name)} -- $argv",
                   "end", ""]
         written.append(name)
+    # Alias Maker windows reload this file when it changes, and use this list to remove
+    # shortcuts that were deleted or renamed.
+    names = " ".join(fish_quote(name) for name in written)
+    lines.append(f"set -g __aliasmaker_shortcut_names {names}".rstrip() + "\n")
     path = fish_shortcuts_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -437,6 +441,13 @@ def write_fish_shortcuts(custom=None):
     except OSError as err:
         print(f"Note: couldn't update {path}: {err}", file=sys.stderr)
     return written
+
+
+def where_shortcuts_work():
+    """Where a new one-word command can be used right away."""
+    if in_alias_maker() and os.path.basename(os.environ.get("SHELL", "")) == "fish":
+        return "(works right away in Alias Maker windows; other terminals need a new window)"
+    return "(in a new terminal window)"
 
 
 def phrase_problem(norm, custom_map):
@@ -596,8 +607,8 @@ def scan_library():
     return library
 
 
-def expand_word(word):
-    """A search word plus simple variations: word endings and common synonyms.
+def word_forms(word):
+    """A search word plus its plain variations (no synonyms).
 
     drives -> drive, chrooting -> chroot, running -> run, mounted -> mount, updated -> update.
     """
@@ -611,33 +622,99 @@ def expand_word(word):
             forms.add(stem[:-1])  # running -> run
     if word.endswith("ed") and len(word) - 2 >= 4:
         forms.update({word[:-2], word[:-1]})  # mounted -> mount, updated -> update
+    return forms
+
+
+def expand_word(word):
+    """word_forms plus common synonyms: drive -> disk, block, partition..."""
+    forms = word_forms(word)
     for form in list(forms):
         forms.update(SYNONYMS.get(form, []))
     return forms
 
 
+# The programs most people actually want for a plain word, best first. Only programs that
+# are installed show up; this just decides the order. ("drives" should put lsblk on top.)
+_DRIVE_PICKS = ["lsblk", "df", "findmnt", "blkid", "fdisk", "partitionmanager", "gparted",
+                "udisksctl", "mount", "du", "ncdu", "smartctl"]
+_NETWORK_PICKS = ["nmcli", "nmtui", "ip", "ping", "iwctl", "ss", "curl"]
+_SOUND_PICKS = ["pavucontrol", "wpctl", "pactl", "alsamixer", "amixer"]
+_PROCESS_PICKS = ["btop", "htop", "top", "ps", "kill", "pkill", "killall"]
+COMMON_PICKS = {
+    "drive": _DRIVE_PICKS, "disk": _DRIVE_PICKS, "storage": _DRIVE_PICKS,
+    "partition": _DRIVE_PICKS, "space": ["df", "du", "ncdu", "lsblk"],
+    "wifi": ["nmcli", "nmtui", "iwctl", "iw"], "internet": _NETWORK_PICKS,
+    "network": _NETWORK_PICKS,
+    "sound": _SOUND_PICKS, "audio": _SOUND_PICKS, "volume": _SOUND_PICKS,
+    "battery": ["upower", "acpi", "powerprofilesctl"],
+    "power": ["poweroff", "reboot", "shutdown", "systemctl", "powerprofilesctl", "upower"],
+    "memory": ["free", "btop", "htop", "top", "vmstat"], "ram": ["free", "btop", "htop", "top"],
+    "process": _PROCESS_PICKS, "task": _PROCESS_PICKS, "kill": ["kill", "pkill", "killall"],
+    "update": ["pacman", "paru", "yay", "checkupdates"],
+    "install": ["pacman", "paru", "yay"], "package": ["pacman", "paru", "yay", "pactree"],
+    "bluetooth": ["bluetoothctl"], "usb": ["lsusb"],
+    "file": ["ls", "find", "cp", "mv", "rm", "dolphin"], "folder": ["ls", "mkdir", "cd", "dolphin"],
+    "zip": ["tar", "unzip", "zip", "7z"], "archive": ["tar", "unzip", "zip", "7z"],
+    "time": ["date", "timedatectl", "cal"], "date": ["date", "timedatectl", "cal"],
+    "user": ["whoami", "id", "useradd", "passwd"], "password": ["passwd"],
+    "download": ["curl", "wget", "aria2c"],
+    "screenshot": ["spectacle"], "picture": ["gwenview", "spectacle"],
+    "cpu": ["lscpu", "btop", "htop", "sensors"], "temperature": ["sensors"],
+    "gpu": ["nvidia-smi", "glxinfo", "lspci"], "graphics": ["nvidia-smi", "glxinfo", "lspci"],
+    "hardware": ["inxi", "lshw", "lspci", "lsusb", "fastfetch"],
+    "log": ["journalctl", "dmesg"], "service": ["systemctl"],
+}
+
+
+def pick_rank(word, name):
+    """Where name sits in the common picks for this word (0 is best), or None."""
+    best = None
+    for form in word_forms(word):
+        picks = COMMON_PICKS.get(form, [])
+        if name in picks:
+            rank = picks.index(name)
+            best = rank if best is None else min(best, rank)
+    return best
+
+
 def search_library(programs, query, limit=20):
-    """Programs whose name, description or package match every word. Name matches first."""
+    """Programs that match every word, best match first.
+
+    Each word scores the program: the name is the word (best), it's one of the common
+    picks for that word, the name starts with or contains it, the description says it,
+    and last, only a synonym matched. Ties go to the shorter name.
+    """
     words = [w for w in query.lower().split() if w]
     if not words:
         return 0, []
     scored = []
     for program in programs:
         name = program["name"].lower()
-        haystack = " ".join([name, program["description"].lower(), (program["package"] or "").lower()])
-        if not all(any(form in haystack for form in expand_word(w)) for w in words):
-            continue
-        if name == words[0]:
-            score = 0
-        elif name.startswith(words[0]):
-            score = 1
-        elif all(w in name for w in words):
-            score = 2
-        elif all(w in haystack for w in words):
-            score = 3
+        about = " ".join([program["description"].lower(), (program["package"] or "").lower()])
+        about_words = set(re.findall(r"[a-z0-9.+-]+", about))
+        total = 0
+        for word in words:
+            forms = word_forms(word)
+            rank = pick_rank(word, name)
+            if name in forms:
+                points = 100
+            elif rank is not None:
+                points = 90 - 3 * rank
+            elif any(name.startswith(form) for form in forms):
+                points = 60
+            elif any(form in name for form in forms):
+                points = 45
+            elif forms & about_words:
+                points = 30
+            elif any(form in about for form in forms):
+                points = 20
+            elif any(form in name or form in about for form in expand_word(word) - forms):
+                points = 10
+            else:
+                break  # this word doesn't match: leave the program out
+            total += points
         else:
-            score = 4  # matched only through a synonym
-        scored.append((score, len(name), name, program))
+            scored.append((-total, len(name), name, program))
     scored.sort(key=lambda item: item[:3])
     return len(scored), [item[3] for item in scored[:limit]]
 
@@ -892,7 +969,21 @@ def read_text_file(path):
         return ""
 
 
-def pc_info():
+TERMINAL_COMMAND = "aliasmaker"  # what the terminal app is called on the PC (and in fastfetch)
+
+
+def in_alias_maker():
+    return os.environ.get("ALIASMAKER") == "1"
+
+
+def terminal_name(inside=None):
+    """The terminal app this runs in, if known. Inside Alias Maker it's "aliasmaker"."""
+    if in_alias_maker() if inside is None else inside:
+        return TERMINAL_COMMAND
+    return os.environ.get("TERM_PROGRAM", "")
+
+
+def pc_info(inside=None):
     """Basic facts about this PC, read straight from the system (for when fastfetch is missing)."""
     import platform
     import socket
@@ -914,7 +1005,9 @@ def pc_info():
     shell = os.environ.get("SHELL", "")
     if shell:
         info.append(("Shell", os.path.basename(shell)))
-    info.append(("Terminal", APP))
+    terminal = terminal_name(inside)
+    if terminal:
+        info.append(("Terminal", terminal))
     cpu = re.search(r"^model name\s*:\s*(.+)$", read_text_file("/proc/cpuinfo"), re.M)
     if cpu:
         info.append(("CPU", f"{cpu.group(1).strip()} ({os.cpu_count()})"))
@@ -933,14 +1026,67 @@ def pc_info():
     return info
 
 
-def welcome_text(color=True):
-    """DOIT with this PC's info beside it. Uses fastfetch when it's installed."""
+# fastfetch's usual list of facts, except that Terminal says "aliasmaker": the app is
+# Python underneath, so fastfetch can't tell what it is on its own. (Newer fastfetch only
+# takes that through a config file, not an option.)
+FASTFETCH_MODULES = ["title", "separator", "os", "host", "kernel", "uptime", "packages", "shell",
+                     "display", "de", "wm", "wmtheme", "theme", "icons", "font", "cursor",
+                     {"type": "terminal", "format": TERMINAL_COMMAND},
+                     "cpu", "gpu", "memory", "swap", "disk", "localip", "battery",
+                     "poweradapter", "locale", "break", "colors"]
+
+
+def fastfetch_config():
+    """Alias Maker's fastfetch settings file (written when missing or out of date)."""
+    path = data_dir() / "fastfetch-welcome.jsonc"
+    text = json.dumps({"modules": FASTFETCH_MODULES}, indent=2) + "\n"
+    try:
+        if not path.is_file() or path.read_text(encoding="utf-8") != text:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+    except OSError:
+        return None
+    return path
+
+
+def fastfetch_command(color, inside):
+    """How to run fastfetch with the DOIT logo, or None when it isn't installed."""
     fastfetch = shutil.which("fastfetch")
-    if fastfetch and logo_path().is_file():
+    if not fastfetch or not logo_path().is_file():
+        return None
+    command = [fastfetch, "--logo", str(logo_path()), "--logo-type", "file",
+               "--logo-color-1", "96", "--pipe", "false" if color else "true"]
+    config = fastfetch_config() if inside else None
+    if config:
+        command[1:1] = ["--config", str(config)]
+    return command
+
+
+def show_welcome():
+    """Print the welcome. In a real terminal, fastfetch takes this process's place, so it
+    sees the shell (fish) as its parent and reports it, not "python3"."""
+    color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    command = fastfetch_command(color, in_alias_maker()) if color else None
+    if command:
+        sys.stdout.flush()
         try:
-            result = subprocess.run([fastfetch, "--logo", str(logo_path()), "--logo-type", "file",
-                                     "--logo-color-1", "96", "--pipe", "false" if color else "true"],
-                                    capture_output=True, text=True, timeout=10)
+            os.execv(command[0], command)
+        except OSError:
+            pass  # fall back to the welcome below
+    sys.stdout.write(welcome_text(color=color))
+    return 0
+
+
+def welcome_text(color=True, inside=None):
+    """DOIT with this PC's info beside it. Uses fastfetch when it's installed.
+
+    inside: whether this is the Alias Maker window (None: tell from $ALIASMAKER).
+    """
+    inside = in_alias_maker() if inside is None else inside
+    command = fastfetch_command(color, inside)
+    if command:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.rstrip("\n") + "\n"
         except (OSError, subprocess.TimeoutExpired):
@@ -948,7 +1094,7 @@ def welcome_text(color=True):
     cyan, bold, reset = ("\033[1;96m", "\033[1;96m", "\033[0m") if color else ("", "", "")
     logo = logo_lines()
     width = max(len(line) for line in logo)
-    info = pc_info()
+    info = pc_info(inside)
     lines = []
     for row in range(max(len(logo), len(info))):
         left = logo[row] if row < len(logo) else ""
@@ -1299,7 +1445,7 @@ def add_custom(state, command=None, program=None):
     state.custom = save_custom_command(phrase, command, confirm, example_notes(example))
     print(f"Saved. Now \"doit {phrase}\" runs: {command}")
     if works_on_its_own(phrase):
-        print(f"You can also type just: {phrase}  (in a new terminal window)")
+        print(f"You can also type just: {phrase}  {where_shortcuts_work()}")
     return 0
 
 
@@ -1408,8 +1554,7 @@ def main(argv):
         print(f"{APP} {VERSION}")
         return 0
     if args and args[0] == "--welcome":  # what Alias Maker shows when a terminal opens
-        sys.stdout.write(welcome_text(color=sys.stdout.isatty() and not os.environ.get("NO_COLOR")))
-        return 0
+        return show_welcome()
 
     migrate_old_dirs()
     state = State(load_examples(), load_settings(), dry_run)

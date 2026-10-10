@@ -19,10 +19,20 @@
 #
 # It also adds the /clippy slash command: "/clippy chrooting" looks chrooting up
 # (CachyOS wiki, Arch Wiki, manual pages on this PC) and never runs chroot.
+#
+# And commands you make in Alias Maker work right away in this window: no need to
+# open a new one.
 
 # The welcome when a terminal opens: a big DOIT with this PC's info next to it (from
 # fastfetch when it's installed, or Alias Maker's own when it isn't).
 set -g __aliasmaker_doit (status dirname)/../doit
+
+# doit works here even if Alias Maker was never installed onto your PATH.
+if not command -q doit; and not functions -q doit
+    function doit --description "Alias Maker"
+        $__aliasmaker_doit $argv
+    end
+end
 
 function fish_greeting
     $__aliasmaker_doit --welcome
@@ -69,9 +79,55 @@ function fish_prompt
     set_color normal
 end
 
-# /clippy <topic>: fish doesn't know any command starting with "/", so it calls
-# fish_command_not_found. Catch /clippy there and hand it to Alias Maker; anything
-# else goes to whatever handler you already had (CachyOS's, or fish's own).
+# Your own one-word commands live in ~/.config/fish/conf.d/alias-maker.fish, which
+# fish reads when a terminal opens. Alias Maker rewrites that file whenever you create,
+# edit or delete a command, so check it before each prompt and reload it when it
+# changed. Returns 0 when it reloaded.
+function __aliasmaker_shortcuts_file
+    echo $__fish_config_dir/conf.d/alias-maker.fish
+end
+
+function __aliasmaker_reload_shortcuts
+    set -l file (__aliasmaker_shortcuts_file)
+    set -l text ""
+    if test -f $file
+        set text (string collect < $file)
+    end
+    if test "$text" = "$__aliasmaker_shortcuts_text"
+        return 1
+    end
+    set -g __aliasmaker_shortcuts_text $text
+    # Remove the old ones first, so a deleted or renamed command really goes away.
+    for name in $__aliasmaker_shortcut_names
+        functions --erase -- $name
+    end
+    set -e __aliasmaker_shortcut_names
+    if test -f $file
+        source $file
+    end
+    return 0
+end
+
+function __aliasmaker_check_shortcuts --on-event fish_prompt
+    __aliasmaker_reload_shortcuts
+end
+
+# Fish already read the file when this window opened; remember it as it is now.
+if test -f (__aliasmaker_shortcuts_file)
+    set -g __aliasmaker_shortcuts_text (string collect < (__aliasmaker_shortcuts_file))
+else
+    set -g __aliasmaker_shortcuts_text ""
+end
+
+# /clippy <topic>: typing /clippy turns into "doit clippy" as soon as you press space
+# or Enter (a fish abbreviation), so it's never shown in red as an unknown command.
+abbr --add __aliasmaker_clippy --position command --regex '^/clippy$' -- 'doit clippy' 2>/dev/null
+
+# Backup for older fish without that kind of abbreviation: fish doesn't know any command
+# starting with "/", so it calls fish_command_not_found. Catch /clippy there and hand
+# it to Alias Maker. The same spot catches a command you made a moment ago in the
+# Alias Maker window while this prompt was already waiting. Anything else goes to
+# whatever handler you already had (CachyOS's, or fish's own).
 if functions -q fish_command_not_found; and not functions -q __aliasmaker_previous_command_not_found
     functions --copy fish_command_not_found __aliasmaker_previous_command_not_found
 end
@@ -79,6 +135,10 @@ end
 function fish_command_not_found
     if test "$argv[1]" = /clippy
         doit clippy $argv[2..-1]
+        return
+    end
+    if __aliasmaker_reload_shortcuts; and functions -q -- $argv[1]
+        $argv
         return
     end
     if functions -q __aliasmaker_previous_command_not_found

@@ -215,6 +215,13 @@ class Table:
         self.scroller.set_vexpand(True)
         self.scroller.set_child(self.view)
 
+    def clear_sort(self):
+        """Go back to the order the rows were given in (search results come best first)."""
+        try:
+            self.view.sort_by_column(None, Gtk.SortType.ASCENDING)
+        except (TypeError, AttributeError):
+            pass
+
     @staticmethod
     def _sorter(text):
         def sort(a, b, *_):
@@ -429,7 +436,7 @@ class TerminalWindow(Gtk.ApplicationWindow):
         self.menu_button = Gtk.MenuButton()
         self.menu_button.set_icon_name("open-menu-symbolic")
         self.menu_button.set_tooltip_text("Menu")
-        self.menu_button.set_menu_model(self.build_menu())
+        self.refresh_menu()
         try:
             # Rebuild the menu each time it opens, so it's right even after `doit create` in the shell.
             self.menu_button.set_create_popup_func(lambda button, *_: self.refresh_menu())
@@ -499,7 +506,18 @@ class TerminalWindow(Gtk.ApplicationWindow):
         return menu
 
     def refresh_menu(self):
-        self.menu_button.set_menu_model(self.build_menu())
+        """Put a fresh ☰ menu on the button.
+
+        Custom Commands opens to the side of the menu, like Konsole's submenus, instead of
+        GTK's default of sliding the whole menu over to show it.
+        """
+        self.menu_model = self.build_menu()
+        try:
+            popover = Gtk.PopoverMenu.new_from_model_full(self.menu_model,
+                                                          Gtk.PopoverMenuFlags.NESTED)
+            self.menu_button.set_popover(popover)
+        except (AttributeError, TypeError):
+            self.menu_button.set_menu_model(self.menu_model)  # older GTK: the sliding menu
 
     def add_window_actions(self):
         actions = {
@@ -534,13 +552,14 @@ class TerminalWindow(Gtk.ApplicationWindow):
         env = dict(os.environ)
         env["PATH"] = SRC_DIR + os.pathsep + env.get("PATH", "")  # doit always works in here
         env["ALIASMAKER"] = "1"
+        env["TERM_PROGRAM"] = core.TERMINAL_COMMAND  # so tools like fastfetch say "aliasmaker"
         env["ALIASMAKER_NAME"] = TERMINAL_NAME
         envv = [f"{key}={value}" for key, value in env.items()]
         cwd = workdir if workdir and os.path.isdir(workdir) else os.path.expanduser("~")
         if not command and os.path.basename(shell) != "fish":
             # fish shows the DOIT welcome itself (lets-do-stuff.fish); for other shells, show it here
             try:
-                self.term.feed(core.welcome_text().replace("\n", "\r\n").encode())
+                self.term.feed(core.welcome_text(inside=True).replace("\n", "\r\n").encode())
             except (TypeError, OSError):
                 pass
         args = [Vte.PtyFlags.DEFAULT, cwd, argv, envv, GLib.SpawnFlags.SEARCH_PATH,
@@ -775,11 +794,14 @@ class DatabaseWindow(Gtk.Window):
         query = self.search.get_text().strip()
         if query:
             total, shown = core.search_library(self.programs, query, limit=len(self.programs))
+            if query != getattr(self, "last_query", None):
+                self.table.clear_sort()  # a new search shows best first, not the old column sort
             note = f"{total} {'match' if total == 1 else 'matches'} for \"{query}\" (best first)"
         else:
             shown = sorted(self.programs, key=lambda p: p["name"].lower())
             note = f"All {len(shown)} programs"
         self.final_note = f"{note}. Click a column title to sort by it. This list is read-only."
+        self.last_query = query
         self.stack.set_visible_child_name("list" if shown else "nomatch")
         self.footer.set_label("")
         self.table.set_rows(shown, animate=animate, on_progress=self.on_progress)
@@ -1526,7 +1548,18 @@ class AliasMakerApp(Gtk.Application):
             self.custom_window.reload()
 
 
+def name_process():
+    """Call this process "aliasmaker" instead of "python3" (in btop, htop, ps and the like)."""
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None)
+        libc.prctl(15, ctypes.c_char_p(core.TERMINAL_COMMAND.encode()), 0, 0, 0)  # PR_SET_NAME
+    except (OSError, AttributeError):
+        pass
+
+
 def main(argv):
+    name_process()
     workdir, command = parse_args(argv)
     app = AliasMakerApp(workdir, command)
     return app.run([sys.argv[0]])

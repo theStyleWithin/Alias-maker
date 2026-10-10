@@ -307,6 +307,31 @@ class TestScan(ScanTestCase):
         _, shown = doit.search_library(library["programs"], "ls")
         self.assertEqual(shown[0]["name"], "ls")
 
+    def test_best_match_comes_first(self):
+        def prog(name, description, package=""):
+            return {"name": name, "description": description, "package": package}
+        programs = [
+            prog("df", "report file system space usage", "coreutils"),
+            prog("du", "estimate file space usage", "coreutils"),
+            prog("findmnt", "find a filesystem", "util-linux"),
+            prog("fdisk", "manipulate disk partition table", "util-linux"),
+            prog("lsblk", "list block devices", "util-linux"),
+            prog("udisksctl", "The udisks command line tool", "udisks2"),
+            prog("hdparm", "get/set SATA/IDE device parameters", "hdparm"),
+            prog("nmcli", "command-line tool for controlling NetworkManager", "networkmanager"),
+            prog("iwctl", "Internet wireless control utility", "iwd"),
+        ]
+        _, shown = doit.search_library(programs, "drives")
+        names = [p["name"] for p in shown]
+        self.assertEqual(names[:3], ["lsblk", "df", "findmnt"])
+        self.assertNotIn("hdparm", names)
+        _, shown = doit.search_library(programs, "disk space")
+        self.assertEqual(shown[0]["name"], "df")
+        _, shown = doit.search_library(programs, "wifi")
+        self.assertEqual(shown[0]["name"], "nmcli")
+        _, shown = doit.search_library(programs, "lsblk")
+        self.assertEqual([p["name"] for p in shown], ["lsblk"])
+
     def test_before_any_scan_the_database_is_empty(self):
         code, out, _ = self.run_doit(["create"], answers=["", "1", "mystery"])
         self.assertIn("The database is empty", out)
@@ -761,6 +786,18 @@ class TestRealTerminalCommands(DoitTestCase):
         self.assertEqual(code, 127)
         self.assertIn("doesn't have a command called", out)
 
+    def test_shortcut_file_lists_its_names_for_live_reload(self):
+        doit.save_custom_command("check-drives", "lsblk -f", False)
+        doit.save_custom_command("doit thing", "ls", False)  # has a space: not a shortcut
+        text = doit.fish_shortcuts_path().read_text()
+        self.assertIn("set -g __aliasmaker_shortcut_names 'check-drives'\n", text)
+
+    def test_create_says_where_the_shortcut_works(self):
+        os.environ["ALIASMAKER"], os.environ["SHELL"] = "1", "/usr/bin/fish"
+        self.assertIn("works right away", doit.where_shortcuts_work())
+        os.environ.pop("ALIASMAKER")
+        self.assertEqual(doit.where_shortcuts_work(), "(in a new terminal window)")
+
     def test_name_suggestions(self):
         self.assertEqual(doit.name_suggestions("just check my fucking drives"),
                          ("check drives", "check-drives", "just-check-my-fucking-drives"))
@@ -770,14 +807,66 @@ class TestRealTerminalCommands(DoitTestCase):
 
 
 
+FISH = os.environ.get("ALIASMAKER_TEST_FISH") or __import__("shutil").which("fish")
+SHELL_SCRIPT = Path(__file__).resolve().parent.parent / "src" / "shell" / "lets-do-stuff.fish"
+
+
+@unittest.skipUnless(FISH, "fish isn't installed")
+class TestFishSetup(DoitTestCase):
+    """Runs the real fish with the Alias Maker window's setup script."""
+
+    def fish(self, script):
+        import subprocess
+        env = dict(os.environ, PATH=os.pathsep.join([str(self.programs), "/usr/bin", "/bin"]))
+        result = subprocess.run([FISH, "--no-config", "-c", f"source '{SHELL_SCRIPT}'\n{script}"],
+                                capture_output=True, text=True, env=env, timeout=30)
+        return result.stdout
+
+    def save(self, name, command):
+        return (f"python3 -c \"import sys; sys.path.insert(0, '{SHELL_SCRIPT.parent.parent}'); "
+                f"import aliasmaker_core as c; c.save_custom_command('{name}', '{command}', False)\"")
+
+    def test_new_commands_work_without_a_new_window(self):
+        out = self.fish("\n".join([
+            "emit fish_prompt",
+            "functions -q check-drives; and echo before:yes; or echo before:no",
+            self.save("check-drives", "lsblk -f"),
+            "emit fish_prompt",
+            "functions -q check-drives; and echo after:yes; or echo after:no",
+        ]))
+        self.assertIn("before:no", out)
+        self.assertIn("after:yes", out)
+
+    def test_deleted_commands_go_away(self):
+        doit.save_custom_command("check-drives", "lsblk -f", False)
+        out = self.fish("\n".join([
+            f"source '{doit.fish_shortcuts_path()}'",
+            "set -g __aliasmaker_shortcuts_text (string collect < " + f"'{doit.fish_shortcuts_path()}')",
+            "python3 -c \"import sys; sys.path.insert(0, '" + str(SHELL_SCRIPT.parent.parent)
+            + "'); import aliasmaker_core as c; c.remove_custom_command('check-drives')\"",
+            "emit fish_prompt",
+            "functions -q check-drives; and echo still:yes; or echo still:no",
+        ]))
+        self.assertIn("still:no", out)
+
+    def test_clippy_is_an_abbreviation(self):
+        out = self.fish("abbr --query __aliasmaker_clippy; and echo abbr:yes")
+        self.assertIn("abbr:yes", out)
+
+
 class TestWelcome(DoitTestCase):
+    def setUp(self):
+        super().setUp()  # the environment is put back after each test
+        os.environ["ALIASMAKER"] = "1"  # as inside the Alias Maker window
+        os.environ.pop("TERM_PROGRAM", None)
+
     def test_without_fastfetch_shows_doit_and_pc_info(self):
         os.environ["SHELL"] = "/usr/bin/fish"
         code, out, _ = self.run_doit(["--welcome"], tty=False)
         self.assertEqual(code, 0)
         lines = out.splitlines()
         self.assertTrue(lines[0].startswith("██████╗   ██████╗  ██╗ ████████╗"))
-        for label in ("OS:", "Kernel:", "Shell: fish", "Terminal: Alias Maker", "Memory:", "Disk (/):"):
+        for label in ("OS:", "Kernel:", "Shell: fish", "Terminal: aliasmaker", "Memory:", "Disk (/):"):
             self.assertIn(label, out)
         self.assertNotIn("\033[", out)  # no colors when not printing to a terminal
         self.assertNotIn("$1", out)
@@ -786,12 +875,23 @@ class TestWelcome(DoitTestCase):
         make_program(self.programs, "fastfetch", 'printf "FASTFETCH %s\\n" "$*"')
         code, out, _ = self.run_doit(["--welcome"], tty=False)
         self.assertEqual(code, 0)
-        self.assertIn(f"FASTFETCH --logo {doit.logo_path()} --logo-type file --logo-color-1 96", out)
+        self.assertIn(f"--logo {doit.logo_path()} --logo-type file --logo-color-1 96", out)
+        self.assertIn(f"FASTFETCH --config {doit.data_dir() / 'fastfetch-welcome.jsonc'}", out)
+        config = json.loads((doit.data_dir() / "fastfetch-welcome.jsonc").read_text())
+        self.assertIn({"type": "terminal", "format": "aliasmaker"}, config["modules"])  # not "python3"
+
+    def test_outside_alias_maker_it_does_not_claim_to_be_it(self):
+        os.environ.pop("ALIASMAKER")
+        _, out, _ = self.run_doit(["--welcome"], tty=False)
+        self.assertNotIn("Terminal:", out)
+        os.environ["TERM_PROGRAM"] = "konsole"
+        _, out, _ = self.run_doit(["--welcome"], tty=False)
+        self.assertIn("Terminal: konsole", out)
 
     def test_falls_back_if_fastfetch_fails(self):
         make_program(self.programs, "fastfetch", "exit 1")
         _, out, _ = self.run_doit(["--welcome"], tty=False)
-        self.assertIn("Terminal: Alias Maker", out)
+        self.assertIn("Terminal: aliasmaker", out)
 
     def test_colors_in_a_terminal(self):
         text = doit.welcome_text(color=True)
