@@ -84,6 +84,7 @@ Everything you type normally still works. `doit` runs the commands **you** make.
 |---|---|
 | `doit` | Asks "Do what? I am waiting..." and waits for you |
 | `doit <your phrase>` | Runs one of your commands |
+| `<your one-word command>` | One-word commands also work on their own, like `check-drives` (see below) |
 | `doit create` | Creates a command from the terminal, step by step (same as Create Command in the menu) |
 | `doit forget <phrase>` or `doit delete <phrase>` | Deletes one of your commands, e.g. `doit forget just check my fucking drives`. Only your alias is deleted, never the real command |
 | `/clippy <topic>` | Looks a topic up instead of running it |
@@ -92,6 +93,31 @@ Everything you type normally still works. `doit` runs the commands **you** make.
 | `doit logging on` / `off` | Turn the command log on or off |
 | `doit answer strict` | Saying yes needs the full word "yes" (`doit answer easy` goes back to y/yes) |
 | `doit answer word <word>` | Pick your own yes word |
+
+### Your commands are real terminal commands
+
+The old-fashioned way to make a shortcut on CachyOS is to edit fish's config file by hand and add lines like `alias update='…'`. Alias Maker does that part for you: it keeps its own file, `~/.config/fish/conf.d/alias-maker.fish`, and rewrites it every time you create, edit or delete a command. Fish loads it in every terminal window, Konsole included. Your own `config.fish` and CachyOS's settings are never touched, and you never need to open the file.
+
+One rule: **a terminal command can't have spaces.** The terminal reads the first word as the command, so `just check my fucking drives` would make it look for a program called `just`. When you name a command with spaces, Alias Maker offers one-word versions:
+
+```
+Let'sdostuff~ ❯ doit create
+What command do you want it to point to? lsblk -f
+Name the new command: just check my fucking drives
+
+"just check my fucking drives" has spaces, so the terminal can't use it as a command
+on its own (it would look for a program called "just"). Pick one:
+  1) doit check drives                    shorter, type it with doit in front
+  2) check-drives                         shorter, works on its own
+  3) just-check-my-fucking-drives         your words with dashes, works on its own
+  4) doit just check my fucking drives    keep it, type it with doit in front
+```
+
+- **One-word names** (like `check-drives`) work on their own and with `doit` in front.
+- **Names with spaces** work with `doit` in front.
+- **Names that are already taken** (a program like `ls`, a fish command like `cd`, or one of CachyOS's shortcuts like `update`) work as `doit <name>` only, so the real one is never hidden.
+
+Shortcuts still go through Alias Maker: they show the real command first, ask before running when set to, and are logged. Extra words are passed along, so `check-drives /dev/sda` runs `lsblk -f /dev/sda`. Open a new terminal window after making a command to use it on its own.
 
 ### Example commands you can make
 

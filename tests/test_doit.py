@@ -308,7 +308,7 @@ class TestScan(ScanTestCase):
         self.assertEqual(shown[0]["name"], "ls")
 
     def test_before_any_scan_the_database_is_empty(self):
-        code, out, _ = self.run_doit(["create"], answers=["1", "mystery"])
+        code, out, _ = self.run_doit(["create"], answers=["", "1", "mystery"])
         self.assertIn("The database is empty", out)
         self.assertFalse(doit.library_path().exists())
 
@@ -324,7 +324,7 @@ class TestScanWithoutTools(DoitTestCase):
 
 class TestCustomCommands(ScanTestCase):
     def test_type_it_myself_then_use_it(self):
-        code, out, _ = self.run_doit(["create"], answers=["3", "true", "just check my fucking drives", "no", "yes"])
+        code, out, _ = self.run_doit(["create"], answers=["true", "just check my fucking drives", "4", "no", "yes"])
         self.assertEqual(code, 0)
         self.assertIn('Now "doit just check my fucking drives" runs: true', out)
         code, out, _ = self.run_doit(["Just", "check", "my", "fucking", "drives!!"], answers=["no"])
@@ -334,7 +334,7 @@ class TestCustomCommands(ScanTestCase):
 
     def test_pick_from_search_and_add_options(self):
         doit.scan_library()
-        answers = ["1", "drives", "1", "-f", "check drives", "no", "yes"]
+        answers = ["", "1", "drives", "1", "-f", "check drives", "2", "no", "yes"]
         code, _, _ = self.run_doit(["create"], answers=answers)
         self.assertEqual(code, 0)
         saved = json.loads(doit.custom_path().read_text())["commands"]
@@ -344,25 +344,25 @@ class TestCustomCommands(ScanTestCase):
         self.assertIn("[dry run] Would run: lsblk -f", out)
 
     def test_start_from_an_example(self):
-        code, _, _ = self.run_doit(["create"], answers=["2", "2", "smash", "no", "yes"])
+        code, _, _ = self.run_doit(["create"], answers=["", "2", "2", "smash", "no", "yes"])
         self.assertEqual(code, 0)
         code, _, _ = self.run_doit(["smash"], answers=["no"])
         self.assertEqual(code, 3)
 
     def test_own_words_are_reserved(self):
-        _, out, _ = self.run_doit(["create"], answers=["3", "true", "list", "my thing", "no", "yes"])
+        _, out, _ = self.run_doit(["create"], answers=["true", "list", "my thing", "2", "no", "yes"])
         self.assertIn("one of Alias Maker's own words", out)
         saved = json.loads(doit.custom_path().read_text())["commands"]
         self.assertEqual(saved[0]["phrase"], "my thing")
 
     def test_example_phrase_is_offered_and_enter_takes_it(self):
-        _, out, prompts = self.run_doit(["create"], answers=["2", "1", "", "no", "yes"])
+        _, out, prompts = self.run_doit(["create"], answers=["", "2", "1", "", "2", "no", "yes"])
         self.assertTrue(any('(Enter for "example one")' in p for p in prompts))
         self.assertIn("A harmless example.", out)
         self.assertEqual([c["phrase"] for c in doit.load_custom()], ["example one"])
 
     def test_example_notes_travel_with_the_command(self):
-        self.run_doit(["create"], answers=["2", "3", "get thing", "yes"])
+        self.run_doit(["create"], answers=["", "2", "3", "get thing", "2", "yes"])
         saved = doit.load_custom()[0]
         self.assertEqual((saved["source_url"], saved["warning"], saved["confirm"]),
                          ("https://example.com/install.sh", "Be careful.", True))
@@ -376,28 +376,28 @@ class TestCustomCommands(ScanTestCase):
         self.assertNotIn("source_url", doit.load_custom()[0], "a changed command drops them")
 
     def test_replacing_my_own_phrase(self):
-        self.run_doit(["create"], answers=["3", "true", "x", "no", "yes"])
-        self.run_doit(["create"], answers=["3", "exit 4", "x", "yes", "no", "yes"])
+        self.run_doit(["create"], answers=["true", "x", "no", "yes"])
+        self.run_doit(["create"], answers=["exit 4", "x", "yes", "no", "yes"])
         saved = json.loads(doit.custom_path().read_text())["commands"]
         self.assertEqual(len(saved), 1)
         code, _, _ = self.run_doit(["x"], answers=["no"])
         self.assertEqual(code, 4)
 
     def test_sudo_commands_always_ask(self):
-        _, out, prompts = self.run_doit(["create"], answers=["3", "sudo true", "admin thing", "yes"])
+        _, out, prompts = self.run_doit(["create"], answers=["sudo true", "admin thing", "2", "yes"])
         self.assertIn("always ask before running it", out)
         self.assertFalse(any(p.startswith("Ask before running") for p in prompts))
         saved = json.loads(doit.custom_path().read_text())["commands"]
         self.assertTrue(saved[0]["confirm"])
 
     def test_not_saving(self):
-        code, out, _ = self.run_doit(["create"], answers=["3", "true", "x", "no", "nah"])
+        code, out, _ = self.run_doit(["create"], answers=["true", "x", "no", "nah"])
         self.assertEqual(code, 1)
         self.assertFalse(doit.custom_path().exists())
 
     def test_forget_and_delete(self):
-        self.run_doit(["create"], answers=["3", "true", "my thing", "no", "yes"])
-        self.run_doit(["create"], answers=["3", "true", "other thing", "no", "yes"])
+        self.run_doit(["create"], answers=["true", "my thing", "2", "no", "yes"])
+        self.run_doit(["create"], answers=["true", "other thing", "2", "no", "yes"])
         code, _, _ = self.run_doit(["forget", "my", "thing"], answers=["yes"])
         self.assertEqual(code, 0)
         code, out, _ = self.run_doit(["delete", "other", "thing"], answers=["yes"])
@@ -418,7 +418,7 @@ class TestCustomCommands(ScanTestCase):
         self.assertFalse(doit.library_path().exists())  # nothing scanned from the terminal
 
     def test_ctrl_d_in_the_middle_saves_nothing(self):
-        code, out, _ = self.run_doit(["create"], answers=["3", "true"])
+        code, out, _ = self.run_doit(["create"], answers=["true"])
         self.assertEqual(code, 0)
         self.assertIn("never mind", out)
         self.assertFalse(doit.custom_path().exists())
@@ -498,8 +498,8 @@ class TestEditAndDelete(DoitTestCase):
         program.write_text("#!/bin/sh\nexit 0\n")
         program.chmod(0o755)
         def snapshot():
-            return {str(f): f.read_bytes() for f in self.home.rglob("*")
-                    if f.is_file() and f.name != "custom.json"}
+            return {str(f): f.read_bytes() for f in self.home.rglob("*")  # Alias Maker's own two files aside
+                    if f.is_file() and f.name not in ("custom.json", "alias-maker.fish")}
         before = snapshot()
         doit.save_custom_command("check drives", f"{program} -f", False)
         doit.remove_custom_command("check drives")
@@ -680,6 +680,93 @@ class TestClippy(DoitTestCase):
         self.assertIn("mount", doit.expand_word("mounted"))
         self.assertIn("update", doit.expand_word("updated"))
         self.assertEqual(doit.expand_word("speed"), {"speed"})
+
+
+
+class TestRealTerminalCommands(DoitTestCase):
+    """One-word commands become real fish commands through Alias Maker's own file."""
+
+    def shortcuts(self):
+        path = doit.fish_shortcuts_path()
+        return path.read_text() if path.exists() else ""
+
+    def test_spaces_get_the_pick_a_name_menu(self):
+        code, out, prompts = self.run_doit(
+            ["create"], answers=["lsblk -f", "just check my fucking drives", "2", "no", "yes"])
+        self.assertEqual(code, 0)
+        self.assertTrue(prompts[0].startswith("What command do you want it to point to?"))
+        self.assertTrue(prompts[1].startswith("Name the new command:"))
+        self.assertIn('it would look for a program called "just"', out)
+        for line in ("1) doit check drives", "2) check-drives", "3) just-check-my-fucking-drives",
+                     "4) doit just check my fucking drives"):
+            self.assertIn(line, out)
+        self.assertEqual([c["phrase"] for c in doit.load_custom()], ["check-drives"])
+        self.assertIn("You can also type just: check-drives", out)
+
+    def test_the_file_is_made_and_kept_in_step(self):
+        doit.save_custom_command("checkdrives", "lsblk -f", False)
+        doit.save_custom_command("check drives", "lsblk", False)
+        text = self.shortcuts()
+        self.assertTrue(text.startswith("# Made by Alias Maker. Don't edit this file by hand"))
+        self.assertIn("function checkdrives --description 'Alias Maker: lsblk -f'", text)
+        self.assertIn(f"{doit.fish_quote(str(doit.doit_path()))} --alias 'checkdrives' -- $argv", text)
+        self.assertFalse(any("check drives" in line for line in text.splitlines()
+                             if line.startswith("function")), "names with spaces get no shortcut")
+        doit.update_custom_command("checkdrives", "drives", "lsblk -f", False)
+        self.assertIn("function drives ", self.shortcuts())
+        self.assertNotIn("function checkdrives ", self.shortcuts())
+        doit.remove_custom_command("drives")
+        self.assertNotIn("function drives ", self.shortcuts())
+        self.assertTrue(self.shortcuts().startswith("# Made by Alias Maker."))
+
+    def test_taken_names_only_work_with_doit(self):
+        make_program(self.programs, "lsblk")
+        fake_cachyos = self.home / "cachyos-config.fish"
+        fake_cachyos.write_text("alias update='sudo cachyos-rate-mirrors && sudo pacman -Syu'\nfunction backup --argument f\nend\n")
+        saved = doit.CACHYOS_FISH_CONFIG
+        doit.CACHYOS_FISH_CONFIG = str(fake_cachyos)
+        try:
+            for name, why in (("lsblk", "a program on your PC"), ("cd", "a built-in fish command"),
+                              ("update", "a shortcut in your fish setup"), ("backup", "a shortcut in your fish setup")):
+                problem = doit.shell_name_problem(name)
+                self.assertEqual(problem[0], "taken", name)
+                self.assertIn(why, problem[1])
+                doit.save_custom_command(name, "true", False)
+                self.assertNotIn(f"function {name} ", self.shortcuts())
+            _, out, _ = self.run_doit(["create"], answers=["true", "update2"])
+            self.assertIn("type it on its own: update2", out)
+            doit.remove_custom_command("update")
+            _, out, _ = self.run_doit(["create"], answers=["true", "update", "no", "yes"])
+            self.assertIn('"update" is already a shortcut in your fish setup', out)
+            self.assertIn('work as "doit update" only', out)
+        finally:
+            doit.CACHYOS_FISH_CONFIG = saved
+
+    def test_users_own_fish_functions_are_respected(self):
+        functions = self.home / "config" / "fish" / "functions"
+        functions.mkdir(parents=True)
+        (functions / "mine.fish").write_text("function mine\nend\n")
+        self.assertEqual(doit.shell_name_problem("mine")[0], "taken")
+
+    def test_shortcut_runs_through_doit_with_extra_words(self):
+        doit.save_custom_command("checkdrives", "lsblk -f", False)
+        code, out, _ = self.run_doit(["--dry-run", "--alias", "checkdrives", "--", "/dev/sda", "it's"],
+                                     answers=["no"])
+        self.assertEqual(code, 0)
+        self.assertIn("Real command: lsblk -f", out)
+        self.assertIn("""[dry run] Would run: lsblk -f /dev/sda 'it'"'"'s'""", out)
+
+    def test_shortcut_for_a_deleted_command(self):
+        code, out, _ = self.run_doit(["--alias", "gone", "--"], tty=False)
+        self.assertEqual(code, 127)
+        self.assertIn("doesn't have a command called", out)
+
+    def test_name_suggestions(self):
+        self.assertEqual(doit.name_suggestions("just check my fucking drives"),
+                         ("check drives", "check-drives", "just-check-my-fucking-drives"))
+        self.assertEqual(doit.name_suggestions("check drives"), (None, None, "check-drives"))
+        self.assertEqual(doit.name_suggestions("Check My Drives!"),
+                         ("check drives", "check-drives", "check-my-drives"))
 
 
 if __name__ == "__main__":

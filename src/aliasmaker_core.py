@@ -16,6 +16,7 @@ Type doit, then what you want:
 
 import difflib
 import json
+import shlex
 import os
 import re
 import shutil
@@ -25,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}
@@ -227,6 +228,7 @@ def load_custom():
 
 def save_custom(custom):
     write_json(custom_path(), {"version": 1, "commands": custom})
+    write_fish_shortcuts(custom)  # keep the real terminal commands in step
 
 
 # Notes a command can carry when it was made from an example (e.g. Brave's installer link).
@@ -297,6 +299,144 @@ def target_program(command):
     if words and words[0] == "sudo":
         words = words[1:]
     return words[0] if words else command
+
+
+# ---------- real terminal commands: Alias Maker's fish file ----------
+#
+# One-word custom commands become real commands in every fish terminal, through a file
+# Alias Maker owns: ~/.config/fish/conf.d/alias-maker.fish (fish loads everything in
+# conf.d by itself). Nobody edits it by hand: it's rewritten whenever a command is
+# created, edited or deleted. Each shortcut runs through doit, so it still shows the
+# real command, asks first when set to, and is logged.
+
+SHELL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
+CACHYOS_FISH_CONFIG = os.environ.get("ALIASMAKER_CACHYOS_FISH_CONFIG",
+                                     "/usr/share/cachyos-fish-config/cachyos-config.fish")
+# fish's own commands and keywords: a shortcut with one of these names would break fish
+FISH_WORDS = {
+    "abbr", "alias", "and", "argparse", "begin", "bg", "bind", "block", "break", "breakpoint",
+    "builtin", "case", "cd", "cdh", "command", "commandline", "complete", "contains", "continue",
+    "count", "dirh", "dirs", "disown", "echo", "else", "emit", "end", "eval", "exec", "exit",
+    "false", "fg", "for", "funced", "funcsave", "function", "functions", "help", "history", "if",
+    "isatty", "jobs", "math", "nextd", "not", "open", "or", "path", "popd", "prevd", "printf",
+    "prompt_pwd", "pushd", "pwd", "random", "read", "realpath", "return", "set", "set_color",
+    "source", "status", "string", "suspend", "switch", "test", "time", "trap", "true", "type",
+    "ulimit", "umask", "vared", "wait", "while", "doit", "aliasmaker",
+}
+FILLER_WORDS = {"just", "my", "the", "a", "an", "please", "me", "i", "some", "all", "really",
+                "to", "of", "for", "and", "it", "this", "that", "your", "our", "now"}
+SHORTCUTS_HEADER = """\
+# Made by Alias Maker. Don't edit this file by hand: it's rewritten every time you
+# create, edit or delete a command. Change your commands in Alias Maker instead
+# (☰ → Custom Commands, or doit create / doit forget in the terminal).
+#
+# Each one-word command below is a real terminal command. It runs through doit, so it
+# still shows the real command, asks first when it's set to, and is logged. Deleting a
+# command in Alias Maker only removes it from here, never the program it points to.
+"""
+
+
+def fish_shortcuts_path():
+    return config_dir().parent / "fish" / "conf.d" / "alias-maker.fish"
+
+
+def doit_path():
+    return Path(__file__).resolve().parent / "doit"
+
+
+def fish_quote(text):
+    """Quote text for fish: single quotes, with backslashes and quotes escaped."""
+    return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def names_in_fish_file(path):
+    """Alias, function and abbreviation names defined in a fish config file."""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return set()
+    names = set(re.findall(r"^\s*alias\s+([^\s=]+)\s*=", text, re.M))
+    names |= set(re.findall(r"^\s*alias\s+([^\s=]+)\s+['\"]", text, re.M))
+    names |= set(re.findall(r"^\s*function\s+([^\s;]+)", text, re.M))
+    names |= set(re.findall(r"^\s*abbr\s+(?:-a\s+|--add\s+)?(?:-\S+\s+)*([^\s-][^\s]*)", text, re.M))
+    return names
+
+
+def shell_config_names():
+    """Names already used by CachyOS's fish config or the user's own fish setup."""
+    fish_dir = config_dir().parent / "fish"
+    names = names_in_fish_file(CACHYOS_FISH_CONFIG) | names_in_fish_file(fish_dir / "config.fish")
+    functions = fish_dir / "functions"
+    if functions.is_dir():
+        names |= {f.stem for f in functions.glob("*.fish")}
+    return names
+
+
+def shell_name_problem(name):
+    """Why this name can't be a command on its own. None if it can.
+
+    Returns (kind, detail): "spaces" (detail: the word the terminal would look for),
+    "characters", or "taken" (detail: what already uses the name).
+    """
+    name = name.strip()
+    if " " in name:
+        return "spaces", name.split()[0]
+    if not SHELL_NAME.match(name):
+        return "characters", None
+    if name in FISH_WORDS:
+        return "taken", "a built-in fish command"
+    if name in shell_config_names():
+        return "taken", "a shortcut in your fish setup"
+    found = shutil.which(name)
+    if found:
+        return "taken", f"a program on your PC ({found})"
+    return None
+
+
+def works_on_its_own(phrase):
+    return shell_name_problem(phrase) is None and not match_builtin(normalize(phrase))
+
+
+def name_suggestions(phrase):
+    """For a name with spaces: (shorter doit phrase, shorter one-word name, full one-word name).
+
+    "just check my fucking drives" -> ("check drives", "check-drives",
+    "just-check-my-fucking-drives"). The shorter ones are None when there's nothing to shorten.
+    """
+    words = [re.sub(r"[^a-z0-9_.+-]", "", w) for w in phrase.lower().split()]
+    words = [w for w in words if w]
+    full = "-".join(words)
+    meaningful = [w for w in words if w not in FILLER_WORDS] or words
+    short_words = [meaningful[0], meaningful[-1]] if len(meaningful) >= 2 else meaningful
+    short_phrase = " ".join(short_words)
+    if len(short_words) < 2 or short_phrase == " ".join(words):
+        return None, None, full
+    return short_phrase, "-".join(short_words), full
+
+
+def write_fish_shortcuts(custom=None):
+    """Rewrite Alias Maker's fish file from the saved commands. Returns the names written."""
+    custom = load_custom() if custom is None else custom
+    written = []
+    lines = [SHORTCUTS_HEADER]
+    for entry in custom:
+        name = entry["phrase"].strip()
+        if not works_on_its_own(name):
+            continue  # works with doit in front only
+        description = fish_quote(f"Alias Maker: {entry['command']}")
+        lines += [f"function {name} --description {description}",
+                  f"    {fish_quote(str(doit_path()))} --alias {fish_quote(name)} -- $argv",
+                  "end", ""]
+        written.append(name)
+    path = fish_shortcuts_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".fish.tmp")
+        tmp.write_text("\n".join(lines), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as err:
+        print(f"Note: couldn't update {path}: {err}", file=sys.stderr)
+    return written
 
 
 def phrase_problem(norm, custom_map):
@@ -873,7 +1013,8 @@ def show_help(examples):
         print("\nExamples you could make (with doit create, or Create Command in the menu):")
         for example in examples:
             print(f"  doit {example['phrase']:<23} -> {example['command']}")
-    print("\nYour own commands are listed in the Alias Maker window: ☰ → Custom Commands.")
+    print("\nOne-word commands you make also work on their own, without doit.")
+    print("Your own commands are listed in the Alias Maker window: ☰ → Custom Commands.")
 
 
 def read_log():
@@ -971,46 +1112,84 @@ def pick_example(state):
     return state.examples[number - 1] if number else None
 
 
+def pick_name(state, example=None):
+    """Ask for the new command's name and help with names the terminal can't use alone."""
+    while True:
+        hint = f" (Enter for \"{example['phrase']}\")" if example else ""
+        phrase = ask_or_leave(f"Name the new command:{hint} ").strip()
+        if not phrase and example:
+            phrase = example["phrase"]
+        if not check_phrase(state, phrase):
+            continue
+        problem = shell_name_problem(phrase)
+        if problem is None:
+            print(f"You'll be able to type it on its own: {phrase}  (or: doit {phrase})")
+            return phrase
+        kind, detail = problem
+        if kind == "taken":
+            print(f"\"{phrase}\" is already {detail}, so yours will work as \"doit {phrase}\" "
+                  f"only. The real {phrase} stays exactly as it is.")
+            return phrase
+        if kind == "characters":
+            print(f"\"{phrase}\" has characters a terminal command can't use, so it will work as "
+                  f"\"doit {phrase}\" only.")
+            return phrase
+        short_phrase, short_name, full_name = name_suggestions(phrase)
+        print(f"\n\"{phrase}\" has spaces, so the terminal can't use it as a command on its own "
+              f"(it would look for a program called \"{detail}\"). Pick one:")
+        options = []
+        if short_phrase:
+            options.append((f"doit {short_phrase}", "shorter, type it with doit in front", short_phrase))
+        if short_name and works_on_its_own(short_name):
+            options.append((short_name, "shorter, works on its own", short_name))
+        if full_name and full_name != short_name and works_on_its_own(full_name):
+            options.append((full_name, "your words with dashes, works on its own", full_name))
+        options.append((f"doit {phrase}", "keep it, type it with doit in front", phrase))
+        width = max(len(shown) for shown, _, _ in options)
+        for number, (shown, why, _) in enumerate(options, 1):
+            print(f"  {number}) {shown:<{width}}   {why}")
+        number = choose(len(options), f"Pick 1-{len(options)} (Enter to type a different name): ")
+        if not number:
+            continue
+        chosen = options[number - 1][2]
+        if chosen != phrase and not check_phrase(state, chosen):
+            continue
+        return chosen
+
+
 def add_custom(state, command=None, program=None):
-    """Walk the user through making their own phrase for a command."""
+    """Walk the user through making their own command: what it runs, then its name."""
     print("\nLet's make your own command.")
     example = None
     if command is None and program is None:
-        print("\nWhat should it run?")
-        print("  1) Search the programs on this PC")
-        print("  2) Start from an example")
-        print("  3) Type the command myself")
-        how = choose(3)
-        if how == 0:
-            return 0
-        if how == 1:
-            program = pick_program(state)
-            if not program:
-                return 0
-        elif how == 2:
-            example = pick_example(state)
-            if not example:
-                return 0
-            command = example["command"]
-            if example.get("explanation"):
-                print(example["explanation"])
+        answer = ask_or_leave("What command do you want it to point to? "
+                              "(type it, or press Enter to search this PC or use an example) ").strip()
+        if answer:
+            command = answer
         else:
-            command = ask_or_leave("Type the command exactly: ").strip()
-            if not command:
+            print("  1) Search the programs on this PC")
+            print("  2) Start from an example")
+            how = choose(2)
+            if how == 0:
                 return 0
+            if how == 1:
+                program = pick_program(state)
+                if not program:
+                    return 0
+            else:
+                example = pick_example(state)
+                if not example:
+                    return 0
+                command = example["command"]
+                if example.get("explanation"):
+                    print(example["explanation"])
     if program:
         extra = ask_or_leave(f"Add anything after \"{program}\"? For example -f. "
                              f"(Enter for nothing) ").strip()
         command = f"{program} {extra}".strip()
-    print(f"\nIt will run: {command}")
+    print(f"It will run: {command}")
 
-    while True:
-        hint = f" (Enter for \"{example['phrase']}\")" if example else ""
-        phrase = ask_or_leave(f"What do you want to type for it, after 'doit'?{hint} ").strip()
-        if not phrase and example:
-            phrase = example["phrase"]
-        if check_phrase(state, phrase):
-            break
+    phrase = pick_name(state, example)
 
     if "sudo" in command.split():
         confirm = True
@@ -1023,13 +1202,16 @@ def add_custom(state, command=None, program=None):
                               f"(type {yes_hint(state.settings)} for yes, anything else for no) ")
         confirm = is_yes(answer, state.settings)
 
-    print(f"\n  doit {phrase}  ->  {command}" + ("  (asks first)" if confirm else ""))
+    alone = f"  (also just: {phrase})" if works_on_its_own(phrase) else ""
+    print(f"\n  doit {phrase}  ->  {command}" + ("  (asks first)" if confirm else "") + alone)
     answer = ask_or_leave(f"Save this? (type {yes_hint(state.settings)} for yes) ")
     if not is_yes(answer, state.settings):
         print("Okay, not saved.")
         return 1
     state.custom = save_custom_command(phrase, command, confirm, example_notes(example))
     print(f"Saved. Now \"doit {phrase}\" runs: {command}")
+    if works_on_its_own(phrase):
+        print(f"You can also type just: {phrase}  (in a new terminal window)")
     return 0
 
 
@@ -1115,6 +1297,19 @@ def handle(text, state):
     return run_entry_flow(custom_entry(custom, state), norm, state)
 
 
+def run_shortcut(state, name, extra):
+    """Run a one-word shortcut like doit would, with any extra words added to the command."""
+    custom = state.custom_map.get(normalize(name))
+    if custom is None:
+        print(f"Alias Maker doesn't have a command called \"{name}\" anymore.")
+        write_fish_shortcuts()  # tidy the shortcut file; new terminal windows won't have it
+        return 127
+    entry = custom_entry(custom, state)
+    if extra:
+        entry["command"] += " " + " ".join(shlex.quote(word) for word in extra)
+    return run_entry_flow(entry, normalize(name), state)
+
+
 def main(argv):
     dry_run = "--dry-run" in argv or os.environ.get("DOIT_DRY_RUN") == "1"
     args = [a for a in argv if a != "--dry-run"]
@@ -1127,6 +1322,9 @@ def main(argv):
 
     migrate_old_dirs()
     state = State(load_examples(), load_settings(), dry_run)
+
+    if args and args[0] == "--alias":  # a one-word shortcut from Alias Maker's fish file
+        return run_shortcut(state, args[1] if len(args) > 1 else "", args[3:] if args[2:3] == ["--"] else args[2:])
 
     if args:
         code = handle(" ".join(args), state)

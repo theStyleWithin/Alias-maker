@@ -851,6 +851,8 @@ class CustomWindow(Gtk.Window):
                    edit="text", on_edit=lambda c, v: self.edit_cell(c, phrase=v)),
             Column("It runs", lambda c: c["command"],
                    edit="text", on_edit=lambda c, v: self.edit_cell(c, command=v)),
+            Column("Works on its own", lambda c: c["phrase"] if core.works_on_its_own(c["phrase"])
+                   else "doit only", 170),
             Column("Asks first", lambda c: "Yes" if c.get("confirm") else "No", 110,
                    edit="check", value=lambda c: c.get("confirm"),
                    on_edit=lambda c, v: self.edit_cell(c, confirm=v)),
@@ -1014,6 +1016,19 @@ class CommandDialog(Gtk.Window):
         self.phrase = Gtk.Entry()
         self.phrase.set_placeholder_text("for example: just check my drives")
         layout.append(self.phrase)
+        self.name_hint = text_label("", "dim-label")
+        self.name_hint.set_visible(False)
+        layout.append(self.name_hint)
+        self.name_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.name_buttons.set_visible(False)
+        self.short_button = Gtk.Button()
+        self.short_button.connect("clicked", lambda button: self.use_name(button.get_label()))
+        self.full_button = Gtk.Button()
+        self.full_button.connect("clicked", lambda button: self.use_name(button.get_label()))
+        self.name_buttons.append(text_label("Use instead:", wrap=False))
+        self.name_buttons.append(self.short_button)
+        self.name_buttons.append(self.full_button)
+        layout.append(self.name_buttons)
         layout.append(text_label("What should it run?"))
         self.command = Gtk.Entry()
         self.command.set_placeholder_text("for example: lsblk -f")
@@ -1049,14 +1064,47 @@ class CommandDialog(Gtk.Window):
         else:
             self.command.set_text(command)
         self.command.connect("changed", lambda *_: self.on_command_changed())
-        self.phrase.connect("changed", lambda *_: self.forget_pending())
+        self.phrase.connect("changed", lambda *_: (self.forget_pending(), self.update_name_hint()))
         self.phrase.connect("activate", lambda *_: self.save())
         self.command.connect("activate", lambda *_: self.save())
         self.on_command_changed()
+        self.update_name_hint()
         (self.phrase if command or existing else self.command).grab_focus()
 
     def forget_pending(self):
         self.pending = None
+
+    def update_name_hint(self):
+        """Say whether the name can be typed on its own, and offer one-word versions if not."""
+        phrase = self.phrase.get_text().strip()
+        self.name_buttons.set_visible(False)
+        if not phrase or core.match_builtin(core.normalize(phrase)):
+            self.name_hint.set_visible(False)
+            return
+        problem = core.shell_name_problem(phrase)
+        if problem is None:
+            text = f"You'll be able to type it on its own: {phrase}  (or: doit {phrase})"
+        elif problem[0] == "taken":
+            text = (f"\"{phrase}\" is already {problem[1]}, so yours will work as "
+                    f"\"doit {phrase}\" only. The real {phrase} stays exactly as it is.")
+        elif problem[0] == "characters":
+            text = f"This name only works with doit in front: doit {phrase}"
+        else:
+            text = (f"Has spaces, so it only works with doit in front: doit {phrase}. "
+                    f"To also type it on its own, use one word:")
+            _, short_name, full_name = core.name_suggestions(phrase)
+            choices = [n for n in (short_name, full_name) if n and core.works_on_its_own(n)]
+            if choices:
+                self.short_button.set_label(choices[0])
+                self.full_button.set_label(choices[-1])
+                self.full_button.set_visible(len(choices) > 1 and choices[0] != choices[-1])
+                self.name_buttons.set_visible(True)
+        self.name_hint.set_label(text)
+        self.name_hint.set_visible(True)
+
+    def use_name(self, name):
+        self.phrase.set_text(name)
+        self.phrase.grab_focus()
 
     def on_example(self):
         """Fill the form from the chosen example. The user can still change anything."""
@@ -1393,6 +1441,7 @@ class AliasMakerApp(Gtk.Application):
     def do_activate(self):
         core.migrate_old_dirs()
         install_table_style()
+        core.write_fish_shortcuts()  # make sure the real terminal commands match the saved ones
         self.new_window(self.workdir, self.command)
         if not core.library_path().is_file():
             self.scanner.start()  # first time Alias Maker takes over: fill the Database

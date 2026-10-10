@@ -10,6 +10,7 @@ Alias Maker is its own terminal app (`aliasmaker`): a window like Konsole that r
 | `src/doit` | The command typed inside the terminal. A thin launcher for the engine. |
 | `src/aliasmaker_core.py` | The shared engine: custom commands, examples, the scan, search, /clippy, logging and settings. Both of the above use it, so a phrase saved in the window works with `doit` straight away. |
 | `data/examples.json` | Example commands users can start from. None of them run on their own. |
+| `~/.config/fish/conf.d/alias-maker.fish` | Written by Alias Maker (not in the repo): the user's one-word commands as real fish commands. |
 | `src/shell/lets-do-stuff.fish` | Inside the window: fish's title and prompt say Let'sdostuff~, and `/clippy` is caught and sent to Alias Maker. |
 
 The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias Maker even if it isn't installed anywhere else. It was split out of [Doit-os](https://github.com/theStyleWithin/Doit-os) so the tool can be built and proven on a regular CachyOS install first. If it's stable there, it becomes Do It OS's selling point; if the distro never ships, this tool still stands on its own.
@@ -20,6 +21,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 |---|---|
 | Wrapper: plain-English phrases run real commands | Built (`src/doit`) |
 | Six ready-made commands turned into examples (no built-in phrases) | Built |
+| One-word commands become real fish commands (Alias Maker's conf.d file), with naming help | Built; untested with real fish |
 | "Do what? I am waiting..." prompt | Built |
 | Third-party install flow (show source URL, ask first) | Built |
 | Command logging (asked once, toggle later, history) | Built |
@@ -42,7 +44,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 60 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (112 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 67 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (119 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
 
 ## Wrapper
 
@@ -162,6 +164,20 @@ The first time the Alias Maker window opens (and on Rescan in the Database windo
 It only reads; it never runs the programs (asking each one for `--help` would mean launching thousands of programs). Without manual pages installed (`sudo pacman -S man-db man-pages`), descriptions come only from packages and are vaguer. The list is saved to `~/.local/share/alias-maker/library.json` and refreshed after Alias Maker's own installs.
 
 **Search** matches every word against names, descriptions and package names. Exact name matches come first. It understands plurals and a small set of plain words: for example "drives" also searches for disk, block and partition, so `lsblk` ("list block devices") turns up.
+
+## Real terminal commands (the fish file)
+
+On CachyOS, shortcuts are normally made by hand: `~/.config/fish/config.fish` loads CachyOS's own `/usr/share/cachyos-fish-config/cachyos-config.fish`, which is full of lines like `alias update='sudo cachyos-rate-mirrors && sudo pacman -Syu'`. Alias Maker replaces that hand-editing.
+
+- It owns `~/.config/fish/conf.d/alias-maker.fish`. Fish loads every file in `conf.d` on its own, so the user's `config.fish` and CachyOS's file are never touched.
+- The file is rewritten from the saved commands every time one is created, edited or deleted (anything that saves `custom.json`, from the window or `doit`), and whenever the window opens. Its header says it's made by Alias Maker and shouldn't be edited by hand.
+- Each one-word command becomes a fish function that runs `doit --alias <name> -- $argv` (by its full path, so it works even if `doit` isn't on `PATH`). So it still shows the real command, asks first when set to, and is logged, and extra words are passed along, safely quoted.
+- **Names with spaces** can't be terminal commands (the first word would be taken as the program), so they work with `doit` in front only. `doit create` and the Create Command window offer one-word versions: a shorter one (first and last meaningful word, filler like "just" and "my" dropped: `check-drives`) and the full phrase with dashes (`just-check-my-fucking-drives`), plus a shorter `doit` phrase or keeping it as typed.
+- **Names already taken** are never written, so nothing real is hidden: programs on `PATH`, fish's own commands and keywords, names defined in CachyOS's fish config or the user's `config.fish`, and functions in `~/.config/fish/functions/`. Those commands work as `doit <name>`. (Fish loads `conf.d` before `config.fish`, so CachyOS's aliases would win anyway.)
+- Deleting a command removes its function from the file; the program it pointed to is untouched.
+- The Custom Commands table shows this in a "Works on its own" column (the name, or "doit only").
+
+`doit create` now asks "What command do you want it to point to?" first (type it, or press Enter to search this PC or start from an example), then "Name the new command:".
 
 ## Custom commands
 
