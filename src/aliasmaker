@@ -43,7 +43,7 @@ except (ImportError, ValueError) as err:
     sys.exit(1)
 
 APP_ID = "io.github.thestylewithin.aliasmaker"
-TERMINAL_NAME = "Let'sdostuff"  # what the title says instead of "fish": Let'sdostuff~
+TERMINAL_NAME = "Let'sdostuff"  # what the title and prompt say instead of "fish": Let'sdostuff~
 FISH_TITLE_SCRIPT = os.path.join(SRC_DIR, "shell", "lets-do-stuff.fish")
 
 # Spreadsheet look: a border around the table, bold headers, even padding in every cell.
@@ -76,7 +76,7 @@ def fish_quote(text):
 
 
 def shell_argv(shell):
-    """How to start the shell. Fish gets the Let'sdostuff~ title; other shells start as-is."""
+    """How to start the shell. Fish gets the Let'sdostuff~ title and prompt; others start as-is."""
     if os.path.basename(shell) == "fish" and os.path.isfile(FISH_TITLE_SCRIPT):
         return [shell, "--init-command", f"source {fish_quote(FISH_TITLE_SCRIPT)}"]
     return [shell]

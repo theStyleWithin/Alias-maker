@@ -10,7 +10,7 @@ Alias Maker is its own terminal app (`aliasmaker`): a window like Konsole that r
 | `src/doit` | The command typed inside the terminal. A thin launcher for the engine. |
 | `src/aliasmaker_core.py` | The shared engine: easy commands, custom commands, the scan, search, logging and settings. Both of the above use it, so a phrase saved in the window works with `doit` straight away. |
 | `data/commands.json` | The easy commands. |
-| `src/shell/lets-do-stuff.fish` | Makes fish's title say Let'sdostuff~ inside the window. |
+| `src/shell/lets-do-stuff.fish` | Makes fish's title and prompt say Let'sdostuff~ inside the window. |
 
 The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias Maker even if it isn't installed anywhere else. It was split out of [Doit-os](https://github.com/theStyleWithin/Doit-os) so the tool can be built and proven on a regular CachyOS install first. If it's stable there, it becomes Do It OS's selling point; if the distro never ships, this tool still stands on its own.
 
@@ -28,7 +28,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Spreadsheet-style tables for the Database and Custom Command List | Built, untested on real hardware |
 | Tables open in their own window and build up gradually | Built, untested on real hardware |
 | Edit Custom Commands directly in the table (Database stays read-only) | Built, untested on real hardware |
-| Title says Let'sdostuff~ instead of fish ~ (fish only) | Built, untested on real hardware |
+| Title and prompt say Let'sdostuff~ instead of fish ~ (fish only) | Built, untested on real hardware |
 | Database: scan of every program on this PC, with search | Built |
 | Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built, untested on real hardware |
 | Konsole-style menu items and shortcuts (New Window, Copy, Paste, Full Screen, font size) | Built, untested on real hardware |
@@ -67,7 +67,12 @@ Piping a remote script into a shell trusts that URL on every run, so the URL is 
 
 Opening Alias Maker starts the user's login shell (fish on CachyOS) in a terminal, like Konsole. It understands `--workdir DIR` and `-e COMMAND`, the options KDE passes to a default terminal, and installs an app-launcher entry in the TerminalEmulator category so it can be picked as the default terminal.
 
-**Let'sdostuff~ instead of fish ~.** When the shell is fish, Alias Maker starts it with `--init-command "source src/shell/lets-do-stuff.fish"`. Fish runs that after the user's own config, and it only defines `fish_title`, so the title reads `Let'sdostuff~` in the home folder, `Let'sdostuff~/Games` elsewhere, and `Let'sdostuff~ : htop` while a program runs. Everything else about fish (prompt, settings, functions) is unchanged, and other terminals are unaffected. The name comes from `$ALIASMAKER_NAME`, which the window sets, so it could become a setting later. Other shells (bash, zsh) start as they are for now. The window reads the title through VTE's older `window-title-changed` signal or the newer `termprop-changed` one, whichever exists. Fish couldn't be run in the build sandbox, so the script was checked by hand.
+**Let'sdostuff~ instead of fish ~.** "fish ~" means nothing to someone new to Linux, so inside Alias Maker the terminal says Let'sdostuff instead, in the title and on the prompt line. When the shell is fish, Alias Maker starts it with `--init-command "source src/shell/lets-do-stuff.fish"`. Fish runs that after the user's own config, and it defines two things:
+
+- `fish_title`: `Let'sdostuff~` in the home folder, `Let'sdostuff~/Games` elsewhere, `Let'sdostuff~ : htop` while a program runs.
+- `fish_prompt`: `Let'sdostuff~ ❯ ` with the full folder after the name; the ❯ turns red after a failed command. This replaces the user's fish prompt inside Alias Maker only.
+
+Everything else about fish (settings, functions, greeting, right-hand prompt) is unchanged, and other terminals are unaffected. The name comes from `$ALIASMAKER_NAME`, which the window sets, so it could become a setting later. Other shells (bash, zsh) start as they are for now. The window reads the title through VTE's older `window-title-changed` signal or the newer `termprop-changed` one, whichever exists. Fish couldn't be run in the build sandbox, so the script was checked by hand.
 
 The ☰ menu, top to bottom:
 

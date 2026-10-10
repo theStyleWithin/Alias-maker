@@ -20,7 +20,14 @@ Create Command
 
 **Deleting a command only deletes your alias.** The real command it points to is never deleted or changed, so nothing on your computer can break. Your aliases only work after `doit`, so they can't replace or interfere with your computer's real commands either: an alias called `ls` doesn't change `ls`.
 
-**It's yours, so it says so:** where other terminals show `fish ~` in the title, Alias Maker shows **Let'sdostuff~** (or `Let'sdostuff~/Games` in another folder). It's still the same fish underneath, with all your settings, and only inside Alias Maker.
+**It's yours, so it says so:** where other terminals show `fish ~`, Alias Maker says **Let'sdostuff~**, both in the title and on the line where you type:
+
+```
+Let'sdostuff~ ❯
+Let'sdostuff~/Games ❯
+```
+
+The folder after it still tells you where you are (`~` is your home folder), and the ❯ turns red when the last command failed. It's still the same fish underneath, with all your settings, and only inside Alias Maker.
 
 The rest of the menu works like Konsole's: New Window, Copy, Paste, Full Screen, and font size, with the same shortcuts.
 
