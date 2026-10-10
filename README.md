@@ -1,5 +1,5 @@
 # Alias-maker
-a simplified terminal wrapper. A terminal wrapper that takes over your terminal it carries over an existing database of commands points the user to what does what allows the user to easily seemlessly revise the command to their preferred terminogy that they understand to get the fucking job done! 
+a simplified terminal app. A terminal app that makes it easy for the most "clinically Linux challenged" person on the planet to use Linux and get the fucking job done!
 
 ## What it is
 
