@@ -132,32 +132,62 @@ def compare(a, b):
     return (a > b) - (a < b)
 
 
+def animations_enabled():
+    """False if the user turned animations off in their desktop settings."""
+    settings = Gtk.Settings.get_default()
+    if settings is None:
+        return True
+    try:
+        return bool(settings.get_property("gtk-enable-animations"))
+    except TypeError:
+        return True
+
+
+FILL_SECONDS = 1.2  # how long the gradual build-up takes, whatever the number of rows
+
+
+class Column:
+    """One table column.
+
+    text(data) gives the cell text, also used for sorting. width is a starting width in
+    pixels, or None for the column that fills the rest. edit is None (read-only), "text"
+    (click the cell and type) or "check" (a checkbox; value(data) gives its state).
+    on_edit(data, new_value) saves a change and returns False to refuse it.
+    """
+
+    def __init__(self, title, text, width=None, edit=None, on_edit=None, value=None):
+        self.title, self.text, self.width = title, text, width
+        self.edit, self.on_edit, self.value = edit, on_edit, value
+
+
 class Table:
     """A spreadsheet-style table: grid lines, bold headers, sortable columns, equal rows.
 
-    columns: list of (title, getter, width) where getter(data) returns the cell text and
-    width is a fixed starting width in pixels, or None for the column that fills the rest.
-    Every column can be resized, and clicking a title sorts by it.
+    Every column can be resized, and clicking a title sorts by it. Rows can fill in
+    gradually (set_rows with animate=True). Cells are read-only unless their column says
+    otherwise.
     """
 
     def __init__(self, columns, on_select, on_activate):
         self.store = Gio.ListStore.new(Row)
+        self.pending = []
+        self.fill_source = None
         self.view = Gtk.ColumnView()
         self.view.set_show_row_separators(True)
         self.view.set_show_column_separators(True)
         self.view.add_css_class("aliasmaker-table")
         self.view.add_css_class("data-table")
-        for title, getter, width in columns:
+        for spec in columns:
             factory = Gtk.SignalListItemFactory()
-            factory.connect("setup", self._setup)
-            factory.connect("bind", self._bind, getter)
-            column = Gtk.ColumnViewColumn.new(title, factory)
+            factory.connect("setup", self._setup, spec)
+            factory.connect("bind", self._bind, spec)
+            column = Gtk.ColumnViewColumn.new(spec.title, factory)
             column.set_resizable(True)
-            if width:
-                column.set_fixed_width(width)
+            if spec.width:
+                column.set_fixed_width(spec.width)
             else:
                 column.set_expand(True)
-            column.set_sorter(self._sorter(getter))
+            column.set_sorter(self._sorter(spec.text))
             self.view.append_column(column)
         self.sorted = Gtk.SortListModel.new(self.store, self.view.get_sorter())
         self.selection = Gtk.SingleSelection.new(self.sorted)
@@ -171,32 +201,127 @@ class Table:
         self.scroller.set_child(self.view)
 
     @staticmethod
-    def _sorter(getter):
+    def _sorter(text):
         def sort(a, b, *_):
-            return compare(getter(a.data).lower(), getter(b.data).lower())
+            return compare(text(a.data).lower(), text(b.data).lower())
         try:
             return Gtk.CustomSorter.new(sort)
         except TypeError:
             return Gtk.CustomSorter.new(sort, None)
 
-    @staticmethod
-    def _setup(_factory, cell):
-        label = Gtk.Label(xalign=0)
-        label.set_ellipsize(Pango.EllipsizeMode.END)  # long text ends in "…" so rows stay even
-        label.set_single_line_mode(True)
-        cell.set_child(label)
+    # --- cells ---
+
+    def _setup(self, _factory, cell, spec):
+        if spec.edit == "text":
+            widget = Gtk.Entry()  # looks like a plain cell; click into it to type, like a spreadsheet
+            widget.set_has_frame(False)
+            widget.set_hexpand(True)
+            widget.connect("activate", lambda entry: self._commit_text(entry, spec))
+            focus = Gtk.EventControllerFocus()
+            focus.connect("enter", lambda *_: self._select_cell(widget))
+            focus.connect("leave", lambda *_: self._commit_text(widget, spec))
+            widget.add_controller(focus)
+            keys = Gtk.EventControllerKey()
+            keys.connect("key-pressed", lambda _c, keyval, *_: self._escape(widget, keyval))
+            widget.add_controller(keys)
+        elif spec.edit == "check":
+            widget = Gtk.CheckButton()
+            widget.set_halign(Gtk.Align.CENTER)
+            widget.connect("toggled", lambda button: self._commit_check(button, spec))
+        else:
+            widget = Gtk.Label(xalign=0)
+            widget.set_ellipsize(Pango.EllipsizeMode.END)  # long text ends in "…" so rows stay even
+            widget.set_single_line_mode(True)
+        widget.cell = cell
+        widget.binding = False
+        cell.set_child(widget)
 
     @staticmethod
-    def _bind(_factory, cell, getter):
-        text = getter(cell.get_item().data)
-        label = cell.get_child()
-        label.set_text(text)
-        label.set_tooltip_text(text if len(text) > 30 else None)  # hover shows the whole thing
+    def _bind(_factory, cell, spec):
+        data = cell.get_item().data
+        widget = cell.get_child()
+        widget.data = data
+        widget.binding = True
+        text = spec.text(data)
+        if spec.edit == "check":
+            widget.set_active(bool(spec.value(data)))
+        else:
+            widget.set_text(text)
+            widget.original = text
+        widget.set_tooltip_text(text if len(text) > 30 else None)  # hover shows the whole thing
+        widget.binding = False
 
-    def set_rows(self, rows):
+    def _select_cell(self, widget):
+        position = widget.cell.get_position()
+        if position != Gtk.INVALID_LIST_POSITION:
+            self.selection.set_selected(position)
+
+    @staticmethod
+    def _escape(entry, keyval):
+        if keyval == Gdk.KEY_Escape:
+            entry.set_text(entry.original)  # undo what was typed
+            return True
+        return False
+
+    @staticmethod
+    def _commit_text(entry, spec):
+        if entry.binding or not hasattr(entry, "data"):
+            return
+        new = entry.get_text().strip()
+        if new == entry.original:
+            return
+        if spec.on_edit(entry.data, new) is False:
+            entry.set_text(entry.original)  # refused: put the old value back
+        else:
+            entry.original = new
+
+    @staticmethod
+    def _commit_check(button, spec):
+        if button.binding or not hasattr(button, "data"):
+            return
+        active = button.get_active()
+        if spec.on_edit(button.data, active) is False:
+            button.binding = True
+            button.set_active(not active)
+            button.binding = False
+
+    # --- rows ---
+
+    def set_rows(self, rows, animate=False, on_progress=None):
+        """Show these rows. With animate=True they fill in gradually instead of all at once."""
+        self.stop_filling()
         self.selection.set_selected(Gtk.INVALID_LIST_POSITION)
         self.store.remove_all()
-        self.store.splice(0, 0, [Row(data) for data in rows])
+        items = [Row(data) for data in rows]
+        if not animate or not items or not animations_enabled():
+            self.store.splice(0, 0, items)
+            if on_progress:
+                on_progress(len(items), len(items))
+            return
+        total_ms = int(FILL_SECONDS * 1000)
+        interval = max(30, min(90, total_ms // len(items)))  # a few rows: one at a time
+        batch = max(1, -(-len(items) * interval // total_ms))  # many rows: a batch per step
+        self.pending = items
+        self.fill_source = GLib.timeout_add(interval, self._fill_step, batch, len(items), on_progress)
+
+    def _fill_step(self, batch, total, on_progress):
+        chunk, self.pending = self.pending[:batch], self.pending[batch:]
+        self.store.splice(self.store.get_n_items(), 0, chunk)
+        if on_progress:
+            on_progress(self.store.get_n_items(), total)
+        if self.pending:
+            return True
+        self.fill_source = None
+        return False
+
+    def stop_filling(self):
+        if self.fill_source is not None:
+            GLib.source_remove(self.fill_source)
+            self.fill_source = None
+        self.pending = []
+
+    def filling(self):
+        return self.fill_source is not None
 
     def count(self):
         return self.store.get_n_items()
@@ -550,11 +675,11 @@ class DatabaseWindow(Gtk.Window):
         self.stack.add_named(scanning, "scanning")
         self.stack.add_named(Gtk.Label(label="Nothing matched. Try different or fewer words."),
                              "nomatch")
-        self.table = Table([
-            ("Command", lambda p: p["name"], 170),
-            ("What it does", lambda p: p["description"] or "(no description)", None),
-            ("Package", lambda p: p.get("package") or "—", 170),
-            ("Location", lambda p: p.get("path", ""), 230),
+        self.table = Table([  # read-only: the Database can't be edited
+            Column("Command", lambda p: p["name"], 170),
+            Column("What it does", lambda p: p["description"] or "(no description)"),
+            Column("Package", lambda p: p.get("package") or "—", 170),
+            Column("Location", lambda p: p.get("path", ""), 230),
         ], on_select=self.update_buttons, on_activate=self.make_custom)
         self.stack.add_named(self.table.scroller, "list")
         layout.append(self.stack)
@@ -575,10 +700,11 @@ class DatabaseWindow(Gtk.Window):
         layout.append(buttons)
         self.set_child(layout)
 
-        app.scanner.listeners.append(self.reload)
+        self.final_note = ""
+        app.scanner.listeners.append(lambda: self.reload(animate=True))
         self.reload()
 
-    def reload(self):
+    def reload(self, animate=False):
         if self.app.scanner.running:
             self.stack.set_visible_child_name("scanning")
             self.status.set_label("Scanning…")
@@ -603,9 +729,9 @@ class DatabaseWindow(Gtk.Window):
             status += ("\nDescriptions are thin because manual pages aren't installed. "
                        "Install them with: sudo pacman -S man-db man-pages, then Rescan.")
         self.status.set_label(status)
-        self.refresh()
+        self.refresh(animate)
 
-    def refresh(self):
+    def refresh(self, animate=False):
         if not self.programs:
             return
         query = self.search.get_text().strip()
@@ -615,10 +741,17 @@ class DatabaseWindow(Gtk.Window):
         else:
             shown = sorted(self.programs, key=lambda p: p["name"].lower())
             note = f"All {len(shown)} programs"
-        self.table.set_rows(shown)
+        self.final_note = f"{note}. Click a column title to sort by it. This list is read-only."
         self.stack.set_visible_child_name("list" if shown else "nomatch")
-        self.footer.set_label(f"{note}. Click a column title to sort by it." if shown else "")
+        self.footer.set_label("")
+        self.table.set_rows(shown, animate=animate, on_progress=self.on_progress)
         self.update_buttons()
+
+    def on_progress(self, done, total):
+        if done < total:
+            self.footer.set_label(f"Loading {done:,} of {total:,}…")
+        else:
+            self.footer.set_label(self.final_note)
 
     def selected(self):
         if self.stack.get_visible_child_name() != "list":
@@ -670,6 +803,8 @@ class CustomWindow(Gtk.Window):
         layout = padded_box()
         layout.append(text_label("Type these in the terminal after doit. For example, if you made "
                                  "\"just check my drives\", type: doit just check my drives"))
+        layout.append(text_label("You can change any cell: click it and type. Enter or clicking "
+                                 "away saves, Esc undoes.", "dim-label"))
         self.hint = text_label("", "accent")
         self.hint.set_visible(False)
         layout.append(self.hint)
@@ -679,14 +814,22 @@ class CustomWindow(Gtk.Window):
                                 "the Database and choose Make Custom Command.")
         empty.set_justify(Gtk.Justification.CENTER)
         self.stack.add_named(empty, "empty")
-        self.table = Table([
-            ("You type (after doit)", lambda c: c["phrase"], 260),
-            ("It runs", lambda c: c["command"], None),
-            ("Asks first", lambda c: "Yes" if c.get("confirm") else "No", 110),
-            ("Made on", lambda c: c.get("added", "")[:10], 120),
+        self.table = Table([  # editable, unlike the Database
+            Column("You type (after doit)", lambda c: c["phrase"], 260,
+                   edit="text", on_edit=lambda c, v: self.edit_cell(c, phrase=v)),
+            Column("It runs", lambda c: c["command"],
+                   edit="text", on_edit=lambda c, v: self.edit_cell(c, command=v)),
+            Column("Asks first", lambda c: "Yes" if c.get("confirm") else "No", 110,
+                   edit="check", value=lambda c: c.get("confirm"),
+                   on_edit=lambda c, v: self.edit_cell(c, confirm=v)),
+            Column("Made on", lambda c: c.get("added", "")[:10], 120),
         ], on_select=self.update_buttons, on_activate=self.activate_selected)
         self.stack.add_named(self.table.scroller, "list")
         layout.append(self.stack)
+        self.message = text_label("")
+        self.message.set_visible(False)
+        layout.append(self.message)
+        self.message_timer = None
 
         buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         buttons.set_halign(Gtk.Align.END)
@@ -719,11 +862,75 @@ class CustomWindow(Gtk.Window):
                 button.remove_css_class("suggested-action")
                 button.remove_css_class("destructive-action")
 
-    def reload(self):
+    def reload(self, animate=False):
         self.custom = core.load_custom()
-        self.table.set_rows(self.custom)
         self.stack.set_visible_child_name("list" if self.custom else "empty")
+        self.table.set_rows(self.custom, animate=animate)
         self.update_buttons()
+        return False  # also used as a one-off idle callback
+
+    def say(self, text, kind):
+        for css in ("error", "warning", "success"):
+            self.message.remove_css_class(css)
+        self.message.add_css_class(kind)
+        self.message.set_label(text)
+        self.message.set_visible(True)
+        if self.message_timer is not None:
+            GLib.source_remove(self.message_timer)
+
+        def hide():
+            self.message.set_visible(False)
+            self.message_timer = None
+            return False
+        self.message_timer = GLib.timeout_add_seconds(8, hide)
+
+    def edit_cell(self, custom, phrase=None, command=None, confirm=None):
+        """Save one changed cell. Returns False (and explains why) to refuse the change."""
+        new_phrase = custom["phrase"] if phrase is None else phrase.strip()
+        new_command = custom["command"] if command is None else command.strip()
+        new_confirm = bool(custom.get("confirm")) if confirm is None else bool(confirm)
+        uses_sudo = "sudo" in new_command.split()
+
+        if phrase is not None:
+            norm = core.normalize(new_phrase)
+            own = core.normalize(custom["phrase"])
+            others = {core.normalize(c["phrase"]): c for c in core.load_custom()}
+            others.pop(own, None)
+            problem, detail = core.phrase_problem(norm, others, self.app.phrase_map)
+            if problem == "empty":
+                self.say("The phrase can't be empty, so I put the old one back.", "error")
+                return False
+            if problem == "reserved":
+                self.say(f"\"{new_phrase}\" is one of {core.APP}'s own words, so I put the old "
+                         "phrase back.", "error")
+                return False
+            if problem == "custom-clash":
+                self.say(f"You already use \"{new_phrase}\" for: {detail}. Pick another phrase, "
+                         "or delete that one first.", "error")
+                return False
+            if problem == "easy-clash":
+                self.say(f"\"{new_phrase}\" is already an easy command (it runs: {detail}). To use "
+                         "it for yours anyway, select the row and press Edit…, which asks first.",
+                         "error")
+                return False
+        if command is not None and not new_command:
+            self.say("The command can't be empty, so I put the old one back.", "error")
+            return False
+        if confirm is not None and not new_confirm and uses_sudo:
+            self.say("Commands that use sudo always ask first, so this stays ticked.", "error")
+            return False
+        if uses_sudo:
+            new_confirm = True
+
+        core.update_custom_command(custom["phrase"], new_phrase, new_command, new_confirm)
+        custom.update(phrase=new_phrase, command=new_command, confirm=new_confirm)
+        self.say(f"Saved. \"doit {new_phrase}\" runs: {new_command}"
+                 + (" (asks first)" if new_confirm else ""), "success")
+        for window in self.app.terminals:
+            window.refresh_menu()
+        if confirm is None and uses_sudo:
+            GLib.idle_add(self.reload)  # show the "Asks first" tick that sudo switched on
+        return True
 
     def selected(self):
         return self.table.selected()
@@ -945,18 +1152,23 @@ class AliasMakerApp(Gtk.Application):
             self.quit()  # the Database and Custom Commands windows close with the last terminal
 
     def show_database(self, parent):
+        """Opens the Database in its own window and builds the table up gradually."""
         if self.database_window is None:
             self.database_window = DatabaseWindow(self)
-        self.database_window.set_transient_for(parent)
-        self.database_window.present()
+        window = self.database_window
+        already_open = window.get_visible()
+        window.present()
+        if not already_open:
+            window.reload(animate=True)
 
     def show_custom(self, parent, mode="list"):
         if self.custom_window is None:
             self.custom_window = CustomWindow(self)
-        self.custom_window.set_transient_for(parent)
-        self.custom_window.reload()
-        self.custom_window.set_mode(mode)
-        self.custom_window.present()
+        window = self.custom_window
+        already_open = window.get_visible()
+        window.set_mode(mode)
+        window.present()
+        window.reload(animate=not already_open)  # builds up gradually when it opens
 
     def show_create(self, parent, command=""):
         CommandDialog(self, parent, command=command).present()
