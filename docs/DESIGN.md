@@ -25,6 +25,8 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Custom commands (user picks their own phrases) | Built |
 | Create, Edit and Delete Command (delete removes the alias only) | Built |
 | Spreadsheet-style tables for the Database and Custom Command List | Built, untested on real hardware |
+| Tables open in their own window and build up gradually | Built, untested on real hardware |
+| Edit Custom Commands directly in the table (Database stays read-only) | Built, untested on real hardware |
 | Database: scan of every program on this PC, with search | Built |
 | Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built, untested on real hardware |
 | Konsole-style menu items and shortcuts (New Window, Copy, Paste, Full Screen, font size) | Built, untested on real hardware |
@@ -34,7 +36,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 55 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (60 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 55 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (83 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
 
 ## Wrapper
 
@@ -100,6 +102,10 @@ Copy and Paste buttons also sit in the title bar, as in Konsole. Plain Ctrl+C st
 | Custom Command List | You type (after doit) · It runs · Asks first · Made on |
 
 With no search, the Database is listed A to Z; with a search, best matches come first (until a column title is clicked).
+
+**Opening and filling.** The Database and the Custom Command List each open in their own window (not pinned on top of the terminal). Every time one opens, its table builds up gradually: rows arrive in steps over about 1.2 seconds whatever their number (a short list appears one row at a time, about 90 ms apart; ~2,000 programs arrive in about 40 batches), with "Loading 1,200 of 1,863…" under the table. Searches and edits update instantly. If the desktop's animations are turned off, rows appear at once.
+
+**Only Custom Commands can be edited.** The Database is read-only: its cells are plain labels. In the Custom Command List, the "You type" and "It runs" cells are text cells: click one and type, then Enter or clicking away saves and Esc undoes. "Asks first" is a checkbox. Each change follows the same rules as the Edit dialog: empty values, Alias Maker's own words and phrases already in use are refused, with the old value put back and a message saying why; an easy-command phrase is refused in the cell (Edit… asks first instead); a `sudo` command always asks first, so typing one ticks the box and unticking it is refused. "Made on" can't be edited.
 
 **Custom Commands window:** a second database, in the same kind of table, that lists only the user's own commands and what they run. Buttons: **Create Command**, **Edit**, **Delete**, **Run in Terminal** (types `doit '<phrase>'` and presses Enter; the quotes keep fish and bash from treating `*`, `$` and the like specially). Opened from Edit Command or Delete Command in the menu, it shows a "pick the command you want to edit/delete" hint, and double-clicking a command does that action.
 
