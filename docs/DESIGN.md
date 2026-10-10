@@ -24,6 +24,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Yes-word settings (easy / strict / custom) | Built |
 | Custom commands (user picks their own phrases) | Built |
 | Create, Edit and Delete Command (delete removes the alias only) | Built |
+| Spreadsheet-style tables for the Database and Custom Command List | Built, untested on real hardware |
 | Database: scan of every program on this PC, with search | Built |
 | Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built, untested on real hardware |
 | Konsole-style menu items and shortcuts (New Window, Copy, Paste, Full Screen, font size) | Built, untested on real hardware |
@@ -33,7 +34,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 55 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (52 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 55 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (60 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
 
 ## Wrapper
 
@@ -89,9 +90,18 @@ The menu is rebuilt each time it opens and after every create, edit or delete, s
 
 Copy and Paste buttons also sit in the title bar, as in Konsole. Plain Ctrl+C still goes to the shell (it stops the running program).
 
-**Database window:** a search box, a Rescan button, and the list of programs with their descriptions. Before the first scan it shows an empty state with a "Scan My Installed Software" button. For a picked program: **Make Custom Command** (pre-fills its name so options can be added), **Read Manual** (runs `man <name>` in the terminal), **Type Into Terminal** (types the name at the prompt without running it). Shows up to 300 programs at a time; typing more words narrows it.
+**Database window:** a search box, a Rescan button, and every program on this PC in a spreadsheet-style table. Before the first scan it shows an empty state with a "Scan My Installed Software" button. For a picked program: **Make Custom Command** (pre-fills its name so options can be added), **Read Manual** (runs `man <name>` in the terminal), **Type Into Terminal** (types the name at the prompt without running it). Double-clicking a program also makes a custom command.
 
-**Custom Commands window:** a second database that lists only the user's own commands and what they run. Buttons: **Create Command**, **Edit**, **Delete**, **Run in Terminal** (types `doit '<phrase>'` and presses Enter; the quotes keep fish and bash from treating `*`, `$` and the like specially). Opened from Edit Command or Delete Command in the menu, it shows a "pick the command you want to edit/delete" hint, and double-clicking a command does that action.
+**Tables.** The Database and the Custom Command List are GTK column views drawn like a spreadsheet: a border around the table, a line between every row and every column, bold column titles and even padding in each cell. Rows are all the same height: long text ends in "…" and hovering shows all of it. Columns can be resized, and clicking a title sorts by that column. The table only draws the rows on screen, so all ~2,000 programs are listed with no cap.
+
+| Table | Columns |
+|---|---|
+| Database | Command · What it does · Package · Location |
+| Custom Command List | You type (after doit) · It runs · Asks first · Made on |
+
+With no search, the Database is listed A to Z; with a search, best matches come first (until a column title is clicked).
+
+**Custom Commands window:** a second database, in the same kind of table, that lists only the user's own commands and what they run. Buttons: **Create Command**, **Edit**, **Delete**, **Run in Terminal** (types `doit '<phrase>'` and presses Enter; the quotes keep fish and bash from treating `*`, `$` and the like specially). Opened from Edit Command or Delete Command in the menu, it shows a "pick the command you want to edit/delete" hint, and double-clicking a command does that action.
 
 **Create/Edit dialog:** what to type, what it runs, and "Ask before running it every time" (forced on for `sudo` commands). Alias Maker's own words are refused; a phrase that's already taken shows what it runs now and needs a second Save to replace it. When editing, the command's own phrase doesn't count as a clash. Editing keeps the command's place in the list.
 

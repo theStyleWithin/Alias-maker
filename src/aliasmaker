@@ -36,13 +36,20 @@ try:
     import gi
     gi.require_version("Gtk", "4.0")
     gi.require_version("Vte", "3.91")
-    from gi.repository import Gdk, Gio, GLib, Gtk, Vte  # noqa: E402
+    gi.require_version("Pango", "1.0")
+    from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango, Vte  # noqa: E402
 except (ImportError, ValueError) as err:
     print(f"{MISSING_PACKAGES}\n({err})", file=sys.stderr)
     sys.exit(1)
 
 APP_ID = "io.github.thestylewithin.aliasmaker"
-MAX_ROWS = 300
+
+# Spreadsheet look: a border around the table, bold headers, even padding in every cell.
+TABLE_CSS = """
+columnview.aliasmaker-table { border: 1px solid alpha(currentColor, 0.3); }
+columnview.aliasmaker-table > header > button { font-weight: bold; padding: 6px 10px; }
+columnview.aliasmaker-table > listview > row > cell { padding: 6px 10px; }
+"""
 
 
 # ---------- small helpers ----------
@@ -97,14 +104,6 @@ def labeled_button(icon, text, tooltip=None):
     return button
 
 
-def clear_list(listbox):
-    child = listbox.get_first_child()
-    while child is not None:
-        following = child.get_next_sibling()
-        listbox.remove(child)
-        child = following
-
-
 def padded_box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=12):
     box = Gtk.Box(orientation=orientation, spacing=spacing)
     for side in ("top", "bottom", "start", "end"):
@@ -120,15 +119,103 @@ def text_label(text, css=None, wrap=True):
     return label
 
 
-def two_line_row(title, subtitle):
-    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-    for side in ("top", "bottom", "start", "end"):
-        getattr(box, f"set_margin_{side}")(6)
-    box.append(text_label(title, "heading", wrap=False))
-    box.append(text_label(subtitle, "dim-label"))
-    row = Gtk.ListBoxRow()
-    row.set_child(box)
-    return row
+class Row(GObject.Object):
+    """One line of a table. Holds the program or custom command it shows."""
+    __gtype_name__ = "AliasMakerRow"
+
+    def __init__(self, data):
+        super().__init__()
+        self.data = data
+
+
+def compare(a, b):
+    return (a > b) - (a < b)
+
+
+class Table:
+    """A spreadsheet-style table: grid lines, bold headers, sortable columns, equal rows.
+
+    columns: list of (title, getter, width) where getter(data) returns the cell text and
+    width is a fixed starting width in pixels, or None for the column that fills the rest.
+    Every column can be resized, and clicking a title sorts by it.
+    """
+
+    def __init__(self, columns, on_select, on_activate):
+        self.store = Gio.ListStore.new(Row)
+        self.view = Gtk.ColumnView()
+        self.view.set_show_row_separators(True)
+        self.view.set_show_column_separators(True)
+        self.view.add_css_class("aliasmaker-table")
+        self.view.add_css_class("data-table")
+        for title, getter, width in columns:
+            factory = Gtk.SignalListItemFactory()
+            factory.connect("setup", self._setup)
+            factory.connect("bind", self._bind, getter)
+            column = Gtk.ColumnViewColumn.new(title, factory)
+            column.set_resizable(True)
+            if width:
+                column.set_fixed_width(width)
+            else:
+                column.set_expand(True)
+            column.set_sorter(self._sorter(getter))
+            self.view.append_column(column)
+        self.sorted = Gtk.SortListModel.new(self.store, self.view.get_sorter())
+        self.selection = Gtk.SingleSelection.new(self.sorted)
+        self.selection.set_autoselect(False)
+        self.selection.set_can_unselect(True)
+        self.selection.connect("notify::selected", lambda *_: on_select())
+        self.view.set_model(self.selection)
+        self.view.connect("activate", lambda *_: on_activate())
+        self.scroller = Gtk.ScrolledWindow()
+        self.scroller.set_vexpand(True)
+        self.scroller.set_child(self.view)
+
+    @staticmethod
+    def _sorter(getter):
+        def sort(a, b, *_):
+            return compare(getter(a.data).lower(), getter(b.data).lower())
+        try:
+            return Gtk.CustomSorter.new(sort)
+        except TypeError:
+            return Gtk.CustomSorter.new(sort, None)
+
+    @staticmethod
+    def _setup(_factory, cell):
+        label = Gtk.Label(xalign=0)
+        label.set_ellipsize(Pango.EllipsizeMode.END)  # long text ends in "…" so rows stay even
+        label.set_single_line_mode(True)
+        cell.set_child(label)
+
+    @staticmethod
+    def _bind(_factory, cell, getter):
+        text = getter(cell.get_item().data)
+        label = cell.get_child()
+        label.set_text(text)
+        label.set_tooltip_text(text if len(text) > 30 else None)  # hover shows the whole thing
+
+    def set_rows(self, rows):
+        self.selection.set_selected(Gtk.INVALID_LIST_POSITION)
+        self.store.remove_all()
+        self.store.splice(0, 0, [Row(data) for data in rows])
+
+    def count(self):
+        return self.store.get_n_items()
+
+    def selected(self):
+        item = self.selection.get_selected_item()
+        return item.data if item is not None else None
+
+
+def install_table_style():
+    provider = Gtk.CssProvider()
+    try:
+        provider.load_from_string(TABLE_CSS)
+    except AttributeError:  # GTK older than 4.12
+        provider.load_from_data(TABLE_CSS.encode())
+    display = Gdk.Display.get_default()
+    if display is not None:
+        Gtk.StyleContext.add_provider_for_display(display, provider,
+                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
 
 def scanned_when(library):
@@ -425,9 +512,8 @@ class DatabaseWindow(Gtk.Window):
         super().__init__(title=f"Database — {core.APP}")
         self.app = app
         self.programs = []
-        self.shown = []
         self.has_manuals = True
-        self.set_default_size(780, 540)
+        self.set_default_size(980, 600)
         self.set_hide_on_close(True)
 
         layout = padded_box()
@@ -464,13 +550,13 @@ class DatabaseWindow(Gtk.Window):
         self.stack.add_named(scanning, "scanning")
         self.stack.add_named(Gtk.Label(label="Nothing matched. Try different or fewer words."),
                              "nomatch")
-        self.listbox = Gtk.ListBox()
-        self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self.listbox.connect("row-selected", lambda *_: self.update_buttons())
-        self.listbox.connect("row-activated", lambda *_: self.make_custom())
-        scroller = Gtk.ScrolledWindow()
-        scroller.set_child(self.listbox)
-        self.stack.add_named(scroller, "list")
+        self.table = Table([
+            ("Command", lambda p: p["name"], 170),
+            ("What it does", lambda p: p["description"] or "(no description)", None),
+            ("Package", lambda p: p.get("package") or "—", 170),
+            ("Location", lambda p: p.get("path", ""), 230),
+        ], on_select=self.update_buttons, on_activate=self.make_custom)
+        self.stack.add_named(self.table.scroller, "list")
         layout.append(self.stack)
         self.footer = text_label("", "dim-label")
         layout.append(self.footer)
@@ -524,25 +610,20 @@ class DatabaseWindow(Gtk.Window):
             return
         query = self.search.get_text().strip()
         if query:
-            total, self.shown = core.search_library(self.programs, query, limit=MAX_ROWS)
+            total, shown = core.search_library(self.programs, query, limit=len(self.programs))
+            note = f"{total} {'match' if total == 1 else 'matches'} for \"{query}\" (best first)"
         else:
-            total, self.shown = len(self.programs), self.programs[:MAX_ROWS]
-        clear_list(self.listbox)
-        for program in self.shown:
-            self.listbox.append(two_line_row(program["name"],
-                                             program["description"] or "(no description)"))
-        self.stack.set_visible_child_name("list" if self.shown else "nomatch")
-        more = total - len(self.shown)
-        self.footer.set_label(f"Showing {len(self.shown)} of {total}. Type more words to narrow it down."
-                              if more > 0 else "")
+            shown = sorted(self.programs, key=lambda p: p["name"].lower())
+            note = f"All {len(shown)} programs"
+        self.table.set_rows(shown)
+        self.stack.set_visible_child_name("list" if shown else "nomatch")
+        self.footer.set_label(f"{note}. Click a column title to sort by it." if shown else "")
         self.update_buttons()
 
     def selected(self):
-        row = self.listbox.get_selected_row()
-        if row is None or self.stack.get_visible_child_name() != "list":
+        if self.stack.get_visible_child_name() != "list":
             return None
-        index = row.get_index()
-        return self.shown[index] if 0 <= index < len(self.shown) else None
+        return self.table.selected()
 
     def update_buttons(self):
         chosen = self.selected() is not None
@@ -583,7 +664,7 @@ class CustomWindow(Gtk.Window):
         self.app = app
         self.custom = []
         self.mode = "list"
-        self.set_default_size(680, 460)
+        self.set_default_size(860, 480)
         self.set_hide_on_close(True)
 
         layout = padded_box()
@@ -598,13 +679,13 @@ class CustomWindow(Gtk.Window):
                                 "the Database and choose Make Custom Command.")
         empty.set_justify(Gtk.Justification.CENTER)
         self.stack.add_named(empty, "empty")
-        self.listbox = Gtk.ListBox()
-        self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self.listbox.connect("row-selected", lambda *_: self.update_buttons())
-        self.listbox.connect("row-activated", lambda *_: self.activate_selected())
-        scroller = Gtk.ScrolledWindow()
-        scroller.set_child(self.listbox)
-        self.stack.add_named(scroller, "list")
+        self.table = Table([
+            ("You type (after doit)", lambda c: c["phrase"], 260),
+            ("It runs", lambda c: c["command"], None),
+            ("Asks first", lambda c: "Yes" if c.get("confirm") else "No", 110),
+            ("Made on", lambda c: c.get("added", "")[:10], 120),
+        ], on_select=self.update_buttons, on_activate=self.activate_selected)
+        self.stack.add_named(self.table.scroller, "list")
         layout.append(self.stack)
 
         buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -640,20 +721,12 @@ class CustomWindow(Gtk.Window):
 
     def reload(self):
         self.custom = core.load_custom()
-        clear_list(self.listbox)
-        for custom in self.custom:
-            note = " · asks first" if custom.get("confirm") else ""
-            self.listbox.append(two_line_row(f"doit {custom['phrase']}",
-                                             f"runs: {custom['command']}{note}"))
+        self.table.set_rows(self.custom)
         self.stack.set_visible_child_name("list" if self.custom else "empty")
         self.update_buttons()
 
     def selected(self):
-        row = self.listbox.get_selected_row()
-        if row is None:
-            return None
-        index = row.get_index()
-        return self.custom[index] if 0 <= index < len(self.custom) else None
+        return self.table.selected()
 
     def update_buttons(self):
         chosen = self.selected() is not None
@@ -845,6 +918,7 @@ class AliasMakerApp(Gtk.Application):
 
     def do_activate(self):
         core.migrate_old_dirs()
+        install_table_style()
         self.new_window(self.workdir, self.command)
         if not core.library_path().is_file():
             self.scanner.start()  # first time Alias Maker takes over: fill the Database
