@@ -14,8 +14,25 @@
 #
 # The name comes from $ALIASMAKER_NAME (set by aliasmaker), so it can change later.
 #
+# When a terminal opens, it shows a big DOIT instead of the CachyOS logo, with your
+# system info (fastfetch) still next to it.
+#
 # It also adds the /clippy slash command: "/clippy chrooting" looks chrooting up
 # (CachyOS wiki, Arch Wiki, manual pages on this PC) and never runs chroot.
+
+# The welcome when a terminal opens: a big DOIT where the CachyOS logo would be. Your
+# system info from fastfetch still shows next to it; without fastfetch, just DOIT.
+set -g __aliasmaker_logo (status dirname)/doit-logo.txt
+
+function fish_greeting
+    if type -q fastfetch; and test -f $__aliasmaker_logo
+        fastfetch --logo $__aliasmaker_logo --logo-type file --logo-color-1 96
+    else if test -f $__aliasmaker_logo
+        set_color --bold brcyan
+        string replace -a '$1' '' <$__aliasmaker_logo
+        set_color normal
+    end
+end
 
 function __aliasmaker_name
     if set -q ALIASMAKER_NAME; and test -n "$ALIASMAKER_NAME"

@@ -30,6 +30,17 @@ Let'sdostuff~ ❯
 Let'sdostuff~/Games ❯
 ```
 
+When a terminal opens, you get a big DOIT where the CachyOS logo would be, with your system info still next to it:
+
+```
+██████╗   ██████╗  ██╗ ████████╗
+██╔══██╗ ██╔═══██╗ ██║ ╚══██╔══╝
+██║  ██║ ██║   ██║ ██║    ██║
+██║  ██║ ██║   ██║ ██║    ██║
+██████╔╝ ╚██████╔╝ ██║    ██║
+╚═════╝   ╚═════╝  ╚═╝    ╚═╝
+```
+
 The folder after it still tells you where you are (`~` is your home folder), and the ❯ turns red when the last command failed. It's still the same fish underneath, with all your settings, and only inside Alias Maker.
 
 **/clippy, the helper:** type `/clippy` and what you're wondering about, and it looks it up instead of running anything:
