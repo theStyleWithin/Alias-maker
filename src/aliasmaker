@@ -1044,8 +1044,8 @@ class CommandDialog(Gtk.Window):
                                      "dim-label"))
         self.ask_first = Gtk.CheckButton(label="Ask before running it every time")
         layout.append(self.ask_first)
-        layout.append(text_label("This only makes a shortcut inside Alias Maker. Your computer's "
-                                 "real commands stay exactly as they are.", "dim-label"))
+        layout.append(text_label("This makes a shortcut. Your computer's real commands stay "
+                                 "exactly as they are.", "dim-label"))
         self.message = text_label("")
         self.message.set_visible(False)
         layout.append(self.message)
