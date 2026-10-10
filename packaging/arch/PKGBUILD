@@ -1,0 +1,57 @@
+# Alias Maker as a normal Arch / CachyOS package.
+#
+# The easy way is the installer (packaging/build-installer.sh makes it), which runs this
+# for you. By hand: put the source tarball next to this file, then run: makepkg -si
+# Uninstall: sudo pacman -R alias-maker   (your commands and settings in ~/.config and
+# ~/.local/share/alias-maker are left alone)
+
+pkgname=alias-maker
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="A simplified terminal app: a database of your programs and your own plain-English commands"
+arch=('any')
+url="https://github.com/theStyleWithin/Alias-maker"
+license=('Apache-2.0')
+depends=('python' 'python-gobject' 'gtk4' 'vte4')
+optdepends=('fish: the Let'"'"'sdostuff~ prompt, /clippy and one-word commands'
+            'fastfetch: full PC info next to the DOIT logo'
+            'man-db: descriptions in the Database and manuals in /clippy'
+            'man-pages: descriptions in the Database'
+            'xdg-utils: opening /clippy results in your browser')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('@SHA256@')
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+    local lib="$pkgdir/usr/lib/$pkgname"
+
+    # The app keeps the repo's layout, so it finds its own files the same way.
+    install -Dm755 src/aliasmaker "$lib/src/aliasmaker"
+    install -Dm755 src/doit "$lib/src/doit"
+    install -Dm644 src/aliasmaker_core.py "$lib/src/aliasmaker_core.py"
+    install -Dm644 src/shell/lets-do-stuff.fish "$lib/src/shell/lets-do-stuff.fish"
+    install -Dm644 src/shell/doit-logo.txt "$lib/src/shell/doit-logo.txt"
+    install -Dm644 data/examples.json "$lib/data/examples.json"
+    python -m compileall -q -d "/usr/lib/$pkgname/src" "$lib/src/aliasmaker_core.py"
+
+    install -dm755 "$pkgdir/usr/bin"
+    ln -s "../lib/$pkgname/src/aliasmaker" "$pkgdir/usr/bin/aliasmaker"
+    ln -s "../lib/$pkgname/src/doit" "$pkgdir/usr/bin/doit"
+
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/aliasmaker.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Alias Maker
+GenericName=Terminal
+Comment=A terminal with a database of your commands and your own custom commands
+Exec=aliasmaker
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;prompt;command;commandline;alias;doit;
+StartupWMClass=io.github.thestylewithin.aliasmaker
+DESKTOP
+
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
