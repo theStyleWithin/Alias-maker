@@ -43,6 +43,8 @@ except (ImportError, ValueError) as err:
     sys.exit(1)
 
 APP_ID = "io.github.thestylewithin.aliasmaker"
+TERMINAL_NAME = "Let'sdostuff"  # what the title says instead of "fish": Let'sdostuff~
+FISH_TITLE_SCRIPT = os.path.join(SRC_DIR, "shell", "lets-do-stuff.fish")
 
 # Spreadsheet look: a border around the table, bold headers, even padding in every cell.
 TABLE_CSS = """
@@ -66,6 +68,18 @@ def user_shell():
         if shell and os.access(shell, os.X_OK):
             return shell
     return "/bin/sh"
+
+
+def fish_quote(text):
+    """Quote text for fish: single quotes, with backslashes and quotes escaped."""
+    return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def shell_argv(shell):
+    """How to start the shell. Fish gets the Let'sdostuff~ title; other shells start as-is."""
+    if os.path.basename(shell) == "fish" and os.path.isfile(FISH_TITLE_SCRIPT):
+        return [shell, "--init-command", f"source {fish_quote(FISH_TITLE_SCRIPT)}"]
+    return [shell]
 
 
 def parse_args(argv):
@@ -436,10 +450,11 @@ class TerminalWindow(Gtk.ApplicationWindow):
         self.add_controller(keys)
 
         self.term.connect("child-exited", lambda *_: self.close())
-        try:
-            self.term.connect("window-title-changed", self.on_title_changed)
-        except TypeError:
-            pass  # newer VTE versions dropped this signal; the title just stays "Alias Maker"
+        for signal in ("window-title-changed", "termprop-changed"):  # older and newer VTE
+            try:
+                self.term.connect(signal, self.on_title_changed)
+            except TypeError:
+                pass
         self.connect("notify::is-active", self.on_active_changed)
         self.connect("close-request", self.on_close_request)
 
@@ -512,10 +527,11 @@ class TerminalWindow(Gtk.ApplicationWindow):
         if command and len(command) == 1 and " " in command[0]:
             argv = [shell, "-c", command[0]]
         else:
-            argv = command or [shell]
+            argv = command or shell_argv(shell)
         env = dict(os.environ)
         env["PATH"] = SRC_DIR + os.pathsep + env.get("PATH", "")  # doit always works in here
         env["ALIASMAKER"] = "1"
+        env["ALIASMAKER_NAME"] = TERMINAL_NAME
         envv = [f"{key}={value}" for key, value in env.items()]
         cwd = workdir if workdir and os.path.isdir(workdir) else os.path.expanduser("~")
         args = [Vte.PtyFlags.DEFAULT, cwd, argv, envv, GLib.SpawnFlags.SEARCH_PATH,
@@ -590,11 +606,24 @@ class TerminalWindow(Gtk.ApplicationWindow):
 
     # --- window state ---
 
-    def on_title_changed(self, *_):
+    def current_title(self):
+        """The title the shell set (Let'sdostuff~ with fish), on old and new VTE alike."""
         try:
             title = self.term.get_window_title()
+            if title:
+                return title
         except (AttributeError, TypeError):
-            title = None
+            pass
+        try:
+            value = self.term.get_termprop_string("xterm.title")
+            return value[0] if isinstance(value, tuple) else value
+        except (AttributeError, TypeError, GLib.Error):
+            return None
+
+    def on_title_changed(self, _term=None, prop=None, *_):
+        if isinstance(prop, str) and prop not in ("xterm.title", "vte.xterm.title"):
+            return  # some other terminal property changed
+        title = self.current_title()
         self.title_label.set_label(title or core.APP)
         self.set_title(f"{title} — {core.APP}" if title else core.APP)
 
