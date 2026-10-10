@@ -475,5 +475,54 @@ class TestWindowHelpers(DoitTestCase):
         self.assertIn("Real command: true", out)
 
 
+
+class TestEditAndDelete(DoitTestCase):
+    def test_edit_keeps_position_and_changes_everything(self):
+        doit.save_custom_command("first", "true", False)
+        doit.save_custom_command("second", "ls", False)
+        doit.update_custom_command("first", "renamed", "lsblk -f", True)
+        saved = doit.load_custom()
+        self.assertEqual([c["phrase"] for c in saved], ["renamed", "second"])
+        self.assertEqual((saved[0]["command"], saved[0]["confirm"]), ("lsblk -f", True))
+        self.assertIn("edited", saved[0])
+
+    def test_edit_onto_another_alias_replaces_it(self):
+        doit.save_custom_command("a", "true", False)
+        doit.save_custom_command("b", "ls", False)
+        doit.update_custom_command("a", "B!", "lsblk", False)
+        saved = doit.load_custom()
+        self.assertEqual([(c["phrase"], c["command"]) for c in saved], [("B!", "lsblk")])
+
+    def test_edit_without_changing_the_phrase(self):
+        doit.save_custom_command("same", "true", False)
+        doit.update_custom_command("same", "same", "ls", False)
+        self.assertEqual([c["command"] for c in doit.load_custom()], ["ls"])
+
+    def test_delete_only_touches_the_alias_list(self):
+        program = self.programs / "lsblk"
+        program.write_text("#!/bin/sh\nexit 0\n")
+        program.chmod(0o755)
+        def snapshot():
+            return {str(f): f.read_bytes() for f in self.home.rglob("*")
+                    if f.is_file() and f.name != "custom.json"}
+        before = snapshot()
+        doit.save_custom_command("check drives", f"{program} -f", False)
+        doit.remove_custom_command("check drives")
+        self.assertEqual(snapshot(), before)  # every other file is exactly as it was
+        self.assertTrue(program.is_file() and os.access(program, os.X_OK))
+        self.assertEqual(doit.load_custom(), [])
+
+    def test_forget_says_the_real_command_is_untouched(self):
+        doit.save_custom_command("check drives", "sudo lsblk -f", False)
+        code, out, _ = self.run_doit(["forget", "check", "drives"], answers=["yes"])
+        self.assertEqual(code, 0)
+        self.assertIn("not deleted or changed", out)
+        self.assertIn("lsblk itself is still there, untouched", out)
+
+    def test_target_program(self):
+        self.assertEqual(doit.target_program("sudo lsblk -f"), "lsblk")
+        self.assertEqual(doit.target_program("df -h"), "df")
+
+
 if __name__ == "__main__":
     unittest.main()

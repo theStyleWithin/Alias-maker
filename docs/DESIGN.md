@@ -1,6 +1,6 @@
 # Alias Maker: design notes
 
-Alias Maker is its own terminal app (`aliasmaker`): a window like Konsole that runs the user's normal shell, with **Database** and **Custom Commands** added to its ☰ menu. Inside it, you type `doit` followed by plain words and it runs the real Linux command. `doit` is only the prefix; the tool is called Alias Maker.
+Alias Maker is its own terminal app (`aliasmaker`): a window like Konsole that runs the user's normal shell, with **Database**, **Custom Commands** and **Create Command** added to its ☰ menu. Inside it, you type `doit` followed by plain words and it runs the real Linux command. `doit` is only the prefix; the tool is called Alias Maker.
 
 ## How it's built
 
@@ -23,6 +23,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Command logging (asked once, toggle later, history) | Built |
 | Yes-word settings (easy / strict / custom) | Built |
 | Custom commands (user picks their own phrases) | Built |
+| Create, Edit and Delete Command (delete removes the alias only) | Built |
 | Database: scan of every program on this PC, with search | Built |
 | Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built, untested on real hardware |
 | Konsole-style menu items and shortcuts (New Window, Copy, Paste, Full Screen, font size) | Built, untested on real hardware |
@@ -32,7 +33,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 49 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (40 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 55 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (52 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
 
 ## Wrapper
 
@@ -65,7 +66,12 @@ The ☰ menu, top to bottom:
 
 ```
 Database                 every program on this PC
-Custom Commands          your own phrases
+Custom Commands  ▸       only appears once the user has made a command
+    Custom Command List
+    Create Command
+    Edit Command
+    Delete Command
+Create Command
 ──────────
 New Window               Ctrl+Shift+N
 Copy                     Ctrl+Shift+C
@@ -79,13 +85,21 @@ Shrink Font              Ctrl+-
 About Alias Maker
 ```
 
+The menu is rebuilt each time it opens and after every create, edit or delete, so Custom Commands appears with the first command (even one made with `doit add` in the shell) and disappears again when the last one is deleted.
+
 Copy and Paste buttons also sit in the title bar, as in Konsole. Plain Ctrl+C still goes to the shell (it stops the running program).
 
 **Database window:** a search box, a Rescan button, and the list of programs with their descriptions. Before the first scan it shows an empty state with a "Scan My Installed Software" button. For a picked program: **Make Custom Command** (pre-fills its name so options can be added), **Read Manual** (runs `man <name>` in the terminal), **Type Into Terminal** (types the name at the prompt without running it). Shows up to 300 programs at a time; typing more words narrows it.
 
-**Custom Commands window:** the list of phrases and what they run. **Add**, **Run in Terminal** (types `doit '<phrase>'` and presses Enter; the quotes keep fish and bash from treating `*`, `$` and the like specially), and **Remove** (click twice to confirm).
+**Custom Commands window:** a second database that lists only the user's own commands and what they run. Buttons: **Create Command**, **Edit**, **Delete**, **Run in Terminal** (types `doit '<phrase>'` and presses Enter; the quotes keep fish and bash from treating `*`, `$` and the like specially). Opened from Edit Command or Delete Command in the menu, it shows a "pick the command you want to edit/delete" hint, and double-clicking a command does that action.
 
-**Add dialog:** what to type, what it runs, and "Ask before running it every time" (forced on for `sudo` commands). Alias Maker's own words are refused; a phrase that's already taken shows what it runs now and needs a second Save to replace it.
+**Create/Edit dialog:** what to type, what it runs, and "Ask before running it every time" (forced on for `sudo` commands). Alias Maker's own words are refused; a phrase that's already taken shows what it runs now and needs a second Save to replace it. When editing, the command's own phrase doesn't count as a clash. Editing keeps the command's place in the list.
+
+**Delete dialog:** says plainly that only the alias is deleted and that the program it points to stays on the computer, unchanged. Cancel has the focus, so Enter never deletes by accident.
+
+### Deleting never touches real commands
+
+Custom commands are entries in Alias Maker's own list (`~/.config/alias-maker/custom.json`). Deleting one removes that entry and nothing else: no program, package or system file is deleted, uninstalled or changed. An automated test checks that every other file is byte-for-byte the same after a delete. Aliases also only run after `doit`, so one can never shadow or replace a real command: an alias named `ls` leaves `ls` alone. `doit forget <phrase>` says the same thing before deleting.
 
 **When the scan happens:** the first time the window opens (in the background, with "Scanning your installed software for the Database…" under the title), on Rescan, and after Alias Maker's own installs. `doit` never scans on its own; `doit rescan` scans on request.
 

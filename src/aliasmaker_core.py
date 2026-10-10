@@ -241,11 +241,46 @@ def save_custom_command(phrase, command, confirm):
     return custom
 
 
+def update_custom_command(old_phrase, phrase, command, confirm):
+    """Change an existing custom command in place (its phrase, command or ask-first setting).
+
+    If the new phrase belongs to a different custom command, that one is replaced:
+    callers ask the user before getting here.
+    """
+    old, new = normalize(old_phrase), normalize(phrase)
+    custom = load_custom()
+    now = datetime.now().isoformat(timespec="seconds")
+    index = next((i for i, c in enumerate(custom) if normalize(c["phrase"]) == old), None)
+    entry = {"phrase": phrase.strip(), "command": command.strip(), "confirm": bool(confirm),
+             "added": custom[index].get("added", now) if index is not None else now, "edited": now}
+    if index is None:
+        custom.append(entry)
+    else:
+        custom[index] = entry
+    custom = [c for c in custom if c is entry or normalize(c["phrase"]) != new]
+    save_custom(custom)
+    return custom
+
+
 def remove_custom_command(phrase):
+    """Delete the user's alias only.
+
+    This edits Alias Maker's own list (custom.json) and nothing else. The program the
+    alias points to is never deleted, uninstalled or changed, so removing an alias
+    can't break the computer.
+    """
     norm = normalize(phrase)
     custom = [c for c in load_custom() if normalize(c["phrase"]) != norm]
     save_custom(custom)
     return custom
+
+
+def target_program(command):
+    """The program a command runs, e.g. 'lsblk' for 'sudo lsblk -f'."""
+    words = command.split()
+    if words and words[0] == "sudo":
+        words = words[1:]
+    return words[0] if words else command
 
 
 def phrase_problem(norm, custom_map, phrase_map):
@@ -787,13 +822,15 @@ def forget_custom(state, phrase):
     if not custom:
         print(f"You don't have a custom command called \"{phrase}\". See yours with: doit my commands")
         return 1
-    answer = ask_or_leave(f"Remove \"doit {custom['phrase']}\" (runs: {custom['command']})? "
-                          f"(type {yes_hint(state.settings)} for yes) ")
+    print(f"This deletes your alias \"doit {custom['phrase']}\" only. The command it points to "
+          f"({custom['command']}) is not deleted or changed.")
+    answer = ask_or_leave(f"Delete the alias? (type {yes_hint(state.settings)} for yes) ")
     if not is_yes(answer, state.settings):
         print("Okay, kept it.")
         return 1
     state.custom = remove_custom_command(custom["phrase"])
-    print(f"Removed \"doit {custom['phrase']}\".")
+    print(f"Deleted your alias \"doit {custom['phrase']}\". "
+          f"{target_program(custom['command'])} itself is still there, untouched.")
     return 0
 
 
