@@ -8,7 +8,8 @@ Type doit, then what you want:
   doit                  asks "Do what? I am waiting..." and waits for you
   doit turn off         runs a command by its plain-English phrase
   /clippy chrooting     look a topic up (in the Alias Maker window; or: doit clippy ...)
-  doit add              make your own phrase for any command
+  doit create           make your own phrase for any command
+  doit forget <phrase>  delete one of your phrases (only the alias, never the real command)
   doit list             the easy commands
   doit --dry-run ...    show what would run, without running anything
 """
@@ -30,7 +31,7 @@ OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}
 NEVER_MIND = {"nothing", "never mind", "nevermind", "cancel", "quit", "exit", "stop"}
 EMPTY_DATABASE = ("The database is empty. It fills up the first time you open the Alias Maker "
-                  "terminal app (or run: doit rescan).")
+                  "terminal app.")
 
 # Plain words people search with, mapped to words that show up in program descriptions.
 SYNONYMS = {
@@ -441,18 +442,6 @@ def scan_library():
     return library
 
 
-def describe_scan(library):
-    programs = library["programs"]
-    manual = sum(p["source"] == "manual" for p in programs)
-    package = sum(p["source"] == "package" for p in programs)
-    print(f"Found {len(programs)} programs on this PC: {manual} described by their manual, "
-          f"{package} by their package, {len(programs) - manual - package} with no description.")
-    if not library.get("has_manuals"):
-        print("Tip: descriptions get much better with manual pages installed:")
-        print("  sudo pacman -S man-db man-pages")
-        print("Then run: doit rescan")
-
-
 def expand_word(word):
     """A search word plus simple variations: word endings and common synonyms.
 
@@ -758,7 +747,7 @@ class State:
         """The saved list of programs, or None if this PC hasn't been scanned yet.
 
         doit never scans on its own: the Alias Maker window scans the first time it
-        opens, and `doit rescan` scans on request.
+        opens, and its Database window has a Rescan button.
         """
         if self._library is None:
             self._library = read_json(library_path(), None)
@@ -800,17 +789,13 @@ def match_builtin(norm):
         return ("list", None)
     if norm in ("history", "show me what you did", "what did you do"):
         return ("history", None)
-    if norm in ("add", "add a command", "make a command", "new command"):
-        return ("add", None)
-    if norm in ("my commands", "custom commands"):
-        return ("custom", None)
-    if norm in ("rescan", "scan"):
-        return ("rescan", None)
+    if norm in ("create", "create a command", "create command", "make a command", "new command"):
+        return ("create", None)
     if norm == "version":
         return ("version", None)
     if words[0] in (HELPER_NAME, "/" + HELPER_NAME):
         return ("clippy", " ".join(words[1:]))
-    if words[0] == "forget" and len(words) > 1:
+    if words[0] in ("forget", "delete"):
         return ("forget", " ".join(words[1:]))
     if len(words) == 2 and words[0] == "logging" and words[1] in ("on", "off"):
         return ("logging", words[1])
@@ -839,21 +824,13 @@ def run_builtin(name, arg, state):
     if name == "answer-word":
         set_yes_words(state.settings, [arg])
         return 0
-    if name == "rescan":
-        print("Looking at what's installed on this PC...")
-        state._library = scan_library()
-        describe_scan(state._library)
-        return 0
     if name == "clippy":
         return clippy(state, arg)
-    if name == "custom":
-        show_custom(state)
-        return 0
     if not interactive():
         print("That one needs you at a terminal to answer questions.")
         return 2
     try:
-        if name == "add":
+        if name == "create":
             return add_custom(state)
         if name == "forget":
             return forget_custom(state, arg)
@@ -888,7 +865,7 @@ def show_list(commands):
             print(f"  {phrases}")
             print(f"      {entry['explanation']}")
         print()
-    print("More: doit add, doit my commands, /clippy <topic>. "
+    print("More: doit create, doit forget <phrase>, /clippy <topic>. "
           "The full Database is in the Alias Maker window (☰ → Database).")
 
 
@@ -911,16 +888,6 @@ def show_history(settings):
         result = "worked" if code == "0" else f"failed (code {code})"
         print(f"  {stamp}  \"{phrase}\"  ->  {command}  [{result}]")
     return 0
-
-
-def show_custom(state):
-    if not state.custom:
-        print("You haven't made any custom commands yet. Make one with: doit add")
-        return
-    print("Your custom commands:\n")
-    for custom in state.custom:
-        ask_note = "  (asks first)" if custom.get("confirm") else ""
-        print(f"  doit {custom['phrase']}  ->  {custom['command']}{ask_note}")
 
 
 def print_results(state, query):
@@ -1046,9 +1013,13 @@ def add_custom(state, command=None, program=None):
 
 
 def forget_custom(state, phrase):
+    if not phrase.strip():
+        print("Tell me which one to delete, for example: doit forget just check my drives")
+        return 1
     custom = state.custom_map.get(normalize(phrase))
     if not custom:
-        print(f"You don't have a custom command called \"{phrase}\". See yours with: doit my commands")
+        print(f"You don't have a custom command called \"{phrase}\". "
+              "See yours in the Alias Maker window: ☰ → Custom Commands.")
         return 1
     print(f"This deletes your alias \"doit {custom['phrase']}\" only. The command it points to "
           f"({custom['command']}) is not deleted or changed.")

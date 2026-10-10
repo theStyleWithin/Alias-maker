@@ -83,13 +83,15 @@ Everything you type normally still works. `doit` adds plain-English commands:
 | `doit turn off` | Shuts down (no question asked) |
 | `doit install brave` | Points to the Brave browser installation command in the Brave browser guide and installs Brave easily |
 | `doit <your phrase>` | Runs one of your custom commands |
+| `doit create` | Creates a command from the terminal, step by step (same as Create Command in the menu) |
+| `doit forget <phrase>` or `doit delete <phrase>` | Deletes one of your commands, e.g. `doit forget just check my fucking drives`. Only your alias is deleted, never the real command |
 | `doit list` | The easy commands |
 | `doit show me what you did` | Your command history, if logging is on |
 | `doit logging on` / `off` | Turn the command log on or off |
 | `doit answer strict` | Saying yes needs the full word "yes" (`doit answer easy` goes back to y/yes) |
 | `doit answer word <word>` | Pick your own yes word |
 
-`doit add`, `doit my commands`, `doit forget <phrase>` and `doit rescan` also exist as backups for when you're not in the Alias Maker window. To search the Database, use ☰ → Database in the window.
+`doit create` and `doit forget` are for anyone who'd rather get used to the terminal than use the menu. Browsing and searching the Database, and editing commands, happen in the window (☰ → Database, ☰ → Custom Commands).
 
 Practice safely: `doit --dry-run <phrase>` shows what would run without running it.
 

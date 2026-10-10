@@ -430,7 +430,7 @@ class TerminalWindow(Gtk.ApplicationWindow):
         self.menu_button.set_tooltip_text("Menu")
         self.menu_button.set_menu_model(self.build_menu())
         try:
-            # Rebuild the menu each time it opens, so it's right even after `doit add` in the shell.
+            # Rebuild the menu each time it opens, so it's right even after `doit create` in the shell.
             self.menu_button.set_create_popup_func(lambda button, *_: self.refresh_menu())
         except (AttributeError, TypeError):
             pass  # the menu is still refreshed whenever a command is created, edited or deleted
