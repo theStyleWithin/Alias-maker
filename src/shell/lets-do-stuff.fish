@@ -13,6 +13,9 @@
 # any other terminal is unaffected.
 #
 # The name comes from $ALIASMAKER_NAME (set by aliasmaker), so it can change later.
+#
+# It also adds the /clippy slash command: "/clippy chrooting" looks chrooting up
+# (CachyOS wiki, Arch Wiki, manual pages on this PC) and never runs chroot.
 
 function __aliasmaker_name
     if set -q ALIASMAKER_NAME; and test -n "$ALIASMAKER_NAME"
@@ -53,4 +56,23 @@ function fish_prompt
     end
     echo -n ' ❯ '
     set_color normal
+end
+
+# /clippy <topic>: fish doesn't know any command starting with "/", so it calls
+# fish_command_not_found. Catch /clippy there and hand it to Alias Maker; anything
+# else goes to whatever handler you already had (CachyOS's, or fish's own).
+if functions -q fish_command_not_found; and not functions -q __aliasmaker_previous_command_not_found
+    functions --copy fish_command_not_found __aliasmaker_previous_command_not_found
+end
+
+function fish_command_not_found
+    if test "$argv[1]" = /clippy
+        doit clippy $argv[2..-1]
+        return
+    end
+    if functions -q __aliasmaker_previous_command_not_found
+        __aliasmaker_previous_command_not_found $argv
+    else
+        printf "fish: Unknown command: %s\n" $argv[1] >&2
+    end
 end

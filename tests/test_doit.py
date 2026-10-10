@@ -524,5 +524,168 @@ class TestEditAndDelete(DoitTestCase):
         self.assertEqual(doit.target_program("df -h"), "df")
 
 
+
+import functools
+import http.server
+import threading
+import time
+from datetime import datetime, timedelta
+
+
+class QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+
+class FakeWiki:
+    """A tiny stand-in for wiki.cachyos.org and the Arch Wiki search, served on this machine."""
+
+    PAGE = """<html><head><title>{title} | CachyOS</title>
+<meta name="description" content="{description}"></head><body>text</body></html>"""
+
+    def __init__(self, folder):
+        self.folder = folder
+        folder.mkdir(parents=True, exist_ok=True)
+        self.server = http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), functools.partial(QuietHandler, directory=str(folder)))
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.pages = {
+            "": ("CachyOS Wiki", "Welcome to the CachyOS wiki"),
+            "features/cachy_chroot": ("CachyOS chroot Helper", "Helper tool to make it easier to chroot into systems"),
+            "configuration/gaming": ("Gaming with CachyOS", "Set up Steam, Proton and controllers"),
+            "configuration/automount_with_fstab": ("Automount with fstab", "Mount drives at boot"),
+            "bg/features/cachy_chroot": ("Помощник за chroot", "Bulgarian page"),
+        }
+        self.write()
+
+    def write(self):
+        locs = "".join(f"<url><loc>{self.base}/{path + '/' if path else ''}</loc></url>" for path in self.pages)
+        (self.folder / "sitemap-index.xml").write_text(
+            f'<?xml version="1.0"?><sitemapindex><sitemap><loc>{self.base}/sitemap-0.xml</loc></sitemap></sitemapindex>')
+        (self.folder / "sitemap-0.xml").write_text(f'<?xml version="1.0"?><urlset>{locs}</urlset>')
+        for path, (title, description) in self.pages.items():
+            folder = self.folder / path
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "index.html").write_text(self.PAGE.format(title=title, description=description))
+        (self.folder / "api.php").write_text(json.dumps(
+            ["chroot", ["Chroot"], [""], ["https://wiki.archlinux.org/title/Chroot"]]))
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class TestClippy(DoitTestCase):
+    def setUp(self):
+        super().setUp()
+        os.environ["no_proxy"] = os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+        self.wiki = FakeWiki(self.home / "wiki")
+        self.saved = (doit.CACHYOS_WIKI, doit.ARCH_WIKI_API)
+        doit.CACHYOS_WIKI = self.wiki.base
+        doit.ARCH_WIKI_API = f"{self.wiki.base}/api.php"
+        self.opened = self.home / "opened.txt"
+        opener = make_program(self.programs, "fake-opener", f'printf "%s" "$1" > "{self.opened}"')
+        os.environ["ALIASMAKER_OPENER"] = str(opener)
+        self.ran_chroot = self.home / "chroot-ran"
+        make_program(self.programs, "chroot", f'touch "{self.ran_chroot}"')
+
+    def tearDown(self):
+        doit.CACHYOS_WIKI, doit.ARCH_WIKI_API = self.saved
+        os.environ.pop("ALIASMAKER_OPENER", None)
+        self.wiki.stop()
+        super().tearDown()
+
+    def test_index_keeps_english_pages_with_titles(self):
+        index = doit.refresh_wiki_index()
+        titles = sorted(p["title"] for p in index["pages"])
+        self.assertEqual(titles, ["Automount with fstab", "CachyOS Wiki", "CachyOS chroot Helper",
+                                  "Gaming with CachyOS"])
+        chroot = [p for p in index["pages"] if p["title"] == "CachyOS chroot Helper"][0]
+        self.assertEqual(chroot["url"], f"{self.wiki.base}/features/cachy_chroot/")
+        self.assertEqual(chroot["description"], "Helper tool to make it easier to chroot into systems")
+
+    def test_clippy_chrooting_shows_links_and_runs_nothing(self):
+        code, out, prompts = self.run_doit(["/clippy", "chrooting"], answers=[""])
+        self.assertEqual(code, 0)
+        self.assertIn("CachyOS chroot Helper - Helper tool to make it easier to chroot into systems", out)
+        self.assertIn(f"{self.wiki.base}/features/cachy_chroot/", out)
+        self.assertIn("Arch Wiki", out)
+        self.assertIn("https://wiki.archlinux.org/title/Chroot", out)
+        self.assertIn("not running anything", out)
+        self.assertTrue(prompts[-1].startswith("Open one?"))
+        self.assertFalse(self.ran_chroot.exists())  # looked up, never run
+
+    def test_picking_a_link_opens_it_in_the_browser(self):
+        code, _, _ = self.run_doit(["/clippy", "chrooting"], answers=["1"])
+        self.assertEqual(code, 0)
+        for _ in range(50):
+            if self.opened.exists():
+                break
+            time.sleep(0.05)
+        self.assertEqual(self.opened.read_text(), f"{self.wiki.base}/features/cachy_chroot/")
+        self.assertFalse(self.ran_chroot.exists())
+
+    def test_plain_questions_work_too(self):
+        _, out, _ = self.run_doit(["clippy", "how", "do", "I", "set", "up", "gaming"], tty=False)
+        self.assertIn("Gaming with CachyOS", out)
+        _, out, _ = self.run_doit(["clippy", "mounting", "drives"], tty=False)
+        self.assertIn("Automount with fstab", out)
+
+    def test_manual_pages_on_this_pc_are_offered(self):
+        make_program(self.programs, "whatis", "printf '%s\\n' 'chroot (8)           - run command or interactive shell with special root directory'")
+        self.run_doit(["rescan"], tty=False)
+        code, out, _ = self.run_doit(["--dry-run", "/clippy", "chrooting"], answers=["3"])
+        self.assertIn("On this PC", out)
+        self.assertIn("chroot - run command or interactive shell with special root directory", out)
+        self.assertIn("[dry run] Would open: man chroot", out)
+        self.assertFalse(self.ran_chroot.exists())
+
+    def test_wiki_list_is_reused_for_a_week(self):
+        _, out, _ = self.run_doit(["clippy", "gaming"], tty=False)
+        self.assertIn("Getting the CachyOS wiki's list", out)
+        _, out, _ = self.run_doit(["clippy", "gaming"], tty=False)
+        self.assertNotIn("Getting the CachyOS wiki's list", out)
+        index = json.loads(doit.wiki_index_path().read_text())
+        index["fetched_at"] = (datetime.now() - timedelta(days=8)).isoformat(timespec="seconds")
+        doit.wiki_index_path().write_text(json.dumps(index))
+        _, out, _ = self.run_doit(["clippy", "gaming"], tty=False)
+        self.assertIn("Getting the CachyOS wiki's list", out)
+
+    def test_offline_with_a_saved_list_still_shows_links(self):
+        self.run_doit(["clippy", "gaming"], tty=False)
+        index = json.loads(doit.wiki_index_path().read_text())
+        index["fetched_at"] = (datetime.now() - timedelta(days=8)).isoformat(timespec="seconds")
+        doit.wiki_index_path().write_text(json.dumps(index))
+        self.wiki.stop()
+        code, out, _ = self.run_doit(["clippy", "gaming"], tty=False)
+        self.assertEqual(code, 0)
+        self.assertIn("Gaming with CachyOS", out)
+        self.assertIn("seem to be offline", out)
+        self.wiki = FakeWiki(self.home / "wiki2")  # so tearDown has something to stop
+
+    def test_offline_with_nothing_saved(self):
+        self.wiki.stop()
+        code, out, _ = self.run_doit(["clippy", "chrooting"], tty=False)
+        self.assertEqual(code, 1)
+        self.assertIn("seem to be offline", out)
+        self.wiki = FakeWiki(self.home / "wiki2")
+
+    def test_needs_a_topic(self):
+        code, out, _ = self.run_doit(["/clippy"], tty=False)
+        self.assertEqual(code, 1)
+        self.assertIn("/clippy chrooting", out)
+
+    def test_clippy_is_one_of_alias_makers_own_words(self):
+        self.assertEqual(doit.phrase_problem("clippy stuff", {}, {})[0], "reserved")
+
+    def test_word_endings(self):
+        self.assertIn("chroot", doit.expand_word("chrooting"))
+        self.assertIn("run", doit.expand_word("running"))
+        self.assertIn("mount", doit.expand_word("mounted"))
+        self.assertIn("update", doit.expand_word("updated"))
+        self.assertEqual(doit.expand_word("speed"), {"speed"})
+
+
 if __name__ == "__main__":
     unittest.main()

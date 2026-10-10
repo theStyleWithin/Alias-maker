@@ -10,7 +10,7 @@ Alias Maker is its own terminal app (`aliasmaker`): a window like Konsole that r
 | `src/doit` | The command typed inside the terminal. A thin launcher for the engine. |
 | `src/aliasmaker_core.py` | The shared engine: easy commands, custom commands, the scan, search, logging and settings. Both of the above use it, so a phrase saved in the window works with `doit` straight away. |
 | `data/commands.json` | The easy commands. |
-| `src/shell/lets-do-stuff.fish` | Makes fish's title and prompt say Let'sdostuff~ inside the window. |
+| `src/shell/lets-do-stuff.fish` | Inside the window: fish's title and prompt say Let'sdostuff~, and `/clippy` is caught and sent to Alias Maker. |
 
 The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias Maker even if it isn't installed anywhere else. It was split out of [Doit-os](https://github.com/theStyleWithin/Doit-os) so the tool can be built and proven on a regular CachyOS install first. If it's stable there, it becomes Do It OS's selling point; if the distro never ships, this tool still stands on its own.
 
@@ -29,6 +29,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Tables open in their own window and build up gradually | Built, untested on real hardware |
 | Edit Custom Commands directly in the table (Database stays read-only) | Built, untested on real hardware |
 | Title and prompt say Let'sdostuff~ instead of fish ~ (fish only) | Built, untested on real hardware |
+| /clippy lookups: CachyOS wiki, Arch Wiki (best effort), manual pages | Built; tested against a stand-in wiki, untested against the real sites and fish |
 | Database: scan of every program on this PC, with search | Built |
 | Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built, untested on real hardware |
 | Konsole-style menu items and shortcuts (New Window, Copy, Paste, Full Screen, font size) | Built, untested on real hardware |
@@ -38,7 +39,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 55 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (92 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 66 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (92 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
 
 ## Wrapper
 
@@ -73,6 +74,18 @@ Opening Alias Maker starts the user's login shell (fish on CachyOS) in a termina
 - `fish_prompt`: `Let'sdostuff~ ❯ ` with the full folder after the name; the ❯ turns red after a failed command. This replaces the user's fish prompt inside Alias Maker only.
 
 Everything else about fish (settings, functions, greeting, right-hand prompt) is unchanged, and other terminals are unaffected. The name comes from `$ALIASMAKER_NAME`, which the window sets, so it could become a setting later. Other shells (bash, zsh) start as they are for now. The window reads the title through VTE's older `window-title-changed` signal or the newer `termprop-changed` one, whichever exists. Fish couldn't be run in the build sandbox, so the script was checked by hand.
+
+**/clippy.** Typing `/clippy <topic>` in the Alias Maker window looks the topic up and never runs it. Fish doesn't know commands starting with `/`, so it calls `fish_command_not_found`; the fish script catches `/clippy` there and runs `doit clippy <topic>`, and passes anything else to the handler that was there before (CachyOS's or fish's own). The slash word is one setting (`HELPER_NAME`).
+
+What it searches:
+
+1. **CachyOS wiki.** Alias Maker keeps a list of the wiki's English pages (title and one-line description) in `~/.local/share/alias-maker/cachyos-wiki.json`. It builds it from the wiki's sitemap (translated pages under `/bg/`, `/de/` and so on are skipped) and refreshes it when it's a week old. Matching uses titles, descriptions and page addresses, not the full page text.
+2. **Arch Wiki,** best effort, through its search API. The Arch Wiki is behind bot protection, which blocked lookups from the build sandbox, so this may come back empty; it fails quietly.
+3. **Manual pages on this PC,** from the Database (needs a scan with manual pages installed).
+
+Words are matched forgivingly: endings are trimmed (chrooting → chroot, mounted → mount), the Database's synonyms apply (drives → disk, partition…), and filler words like "how do I" are ignored. Results are numbered; picking a web page opens it with `xdg-open`, picking a manual runs `man`. Offline, it says so and still shows saved wiki pages and manuals. It's not AI and never invents an answer.
+
+The name `/clippy` was the author's choice. Microsoft owns the Clippy character and trademark; the command uses only the word, with no Clippy artwork.
 
 The ☰ menu, top to bottom:
 

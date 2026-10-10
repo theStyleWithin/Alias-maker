@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}
@@ -455,10 +455,20 @@ def describe_scan(library):
 
 
 def expand_word(word):
-    """A search word plus simple variations: plural/singular and common synonyms."""
+    """A search word plus simple variations: word endings and common synonyms.
+
+    drives -> drive, chrooting -> chroot, running -> run, mounted -> mount, updated -> update.
+    """
     forms = {word}
     if len(word) > 3 and word.endswith("s"):
         forms.add(word[:-1])
+    if word.endswith("ing") and len(word) - 3 >= 3:
+        stem = word[:-3]
+        forms.add(stem)
+        if len(stem) >= 4 and stem[-1] == stem[-2]:
+            forms.add(stem[:-1])  # running -> run
+    if word.endswith("ed") and len(word) - 2 >= 4:
+        forms.update({word[:-2], word[:-1]})  # mounted -> mount, updated -> update
     for form in list(forms):
         forms.update(SYNONYMS.get(form, []))
     return forms
@@ -498,6 +508,236 @@ def search_easy(commands, query):
         if words and all(any(form in haystack for form in expand_word(w)) for w in words):
             found.append(entry)
     return found
+
+
+# ---------- /clippy: look things up instead of running them ----------
+
+HELPER_NAME = "clippy"  # the slash command: /clippy chrooting
+CACHYOS_WIKI = os.environ.get("ALIASMAKER_CACHYOS_WIKI", "https://wiki.cachyos.org").rstrip("/")
+ARCH_WIKI_API = os.environ.get("ALIASMAKER_ARCH_WIKI_API", "https://wiki.archlinux.org/api.php")
+WIKI_MAX_AGE_DAYS = 7
+USER_AGENT = f"AliasMaker/{VERSION} (+https://github.com/theStyleWithin/Alias-maker)"
+LANGUAGE_PREFIX = re.compile(r"^[a-z]{2}(-[a-z]{2,4})?$")  # /bg/, /de/, /zh/: translated pages
+STOP_WORDS = {"how", "do", "i", "a", "an", "the", "to", "my", "is", "what", "can", "you", "me",
+              "with", "in", "on", "of", "for", "and", "it", "does", "about", "please", "help",
+              "use", "using", "make", "get", "into", "from", "this", "that"}
+
+
+def wiki_index_path():
+    return data_dir() / "cachyos-wiki.json"
+
+
+def fetch_text(url, timeout=8):
+    """Download a page. Raises OSError (including URLError) if it can't."""
+    import urllib.request
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def sitemap_urls(xml):
+    return re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", xml)
+
+
+def english_page(url):
+    """True for the English pages (no language prefix like /bg/ or /de/)."""
+    from urllib.parse import urlparse
+    path = urlparse(url).path.strip("/")
+    first = path.split("/", 1)[0] if path else ""
+    return not LANGUAGE_PREFIX.match(first)
+
+
+def title_from_url(url):
+    from urllib.parse import urlparse
+    slug = urlparse(url).path.strip("/").split("/")[-1] or "home"
+    return slug.replace("_", " ").replace("-", " ").capitalize()
+
+
+def page_details(url):
+    """Title and one-line description from a wiki page (falls back to its address)."""
+    import html
+    try:
+        page = fetch_text(url)
+    except (OSError, ValueError):
+        return {"url": url, "title": title_from_url(url), "description": ""}
+    title = re.search(r"<title>(.*?)</title>", page, re.S | re.I)
+    description = (re.search(r'<meta\s+name="description"\s+content="([^"]*)"', page, re.I)
+                   or re.search(r'<meta\s+content="([^"]*)"\s+name="description"', page, re.I))
+    title = html.unescape(title.group(1)).strip() if title else title_from_url(url)
+    title = re.sub(r"\s*\|\s*CachyOS\s*$", "", title)
+    return {"url": url, "title": title,
+            "description": html.unescape(description.group(1)).strip() if description else ""}
+
+
+def refresh_wiki_index():
+    """Download the list of English CachyOS wiki pages with their titles. Raises OSError offline."""
+    from concurrent.futures import ThreadPoolExecutor
+    root = fetch_text(f"{CACHYOS_WIKI}/sitemap-index.xml")
+    urls = []
+    if "<sitemapindex" in root:
+        for sitemap in sitemap_urls(root):
+            urls += sitemap_urls(fetch_text(sitemap))
+    else:
+        urls = sitemap_urls(root)
+    urls = sorted({u for u in urls if english_page(u)})
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        pages = list(pool.map(page_details, urls))
+    index = {"fetched_at": datetime.now().isoformat(timespec="seconds"),
+             "source": CACHYOS_WIKI, "pages": pages}
+    write_json(wiki_index_path(), index)
+    return index
+
+
+def wiki_index(quiet=False):
+    """The saved wiki index, refreshed when it's a week old. Returns (index or None, online)."""
+    index = read_json(wiki_index_path(), None)
+    fresh = False
+    if index and index.get("source") == CACHYOS_WIKI:
+        try:
+            age = datetime.now() - datetime.fromisoformat(index["fetched_at"])
+            fresh = age.days < WIKI_MAX_AGE_DAYS
+        except (KeyError, ValueError):
+            fresh = False
+    else:
+        index = None
+    if fresh:
+        return index, None  # None: didn't need to check the internet
+    if not quiet:
+        print("Getting the CachyOS wiki's list of pages (only once a week, a few seconds)...")
+    try:
+        return refresh_wiki_index(), True
+    except (OSError, ValueError):
+        return index, False
+
+
+def meaningful_words(query):
+    words = [w for w in re.findall(r"[a-z0-9][a-z0-9+._-]*", query.lower())]
+    kept = [w for w in words if w not in STOP_WORDS]
+    return kept or words
+
+
+def score_text(words, *weighted_fields):
+    """How well the words match: each word scores by the best field it appears in."""
+    total = 0
+    for word in words:
+        forms = expand_word(word)
+        best = 0
+        for weight, text in weighted_fields:
+            if any(form in text for form in forms):
+                best = max(best, weight)
+        total += best
+    return total
+
+
+def search_wiki(pages, query, limit=5):
+    words = meaningful_words(query)
+    scored = []
+    for page in pages:
+        score = score_text(words, (3, page["title"].lower()), (2, page["description"].lower()),
+                           (1, page["url"].lower().replace("_", " ").replace("-", " ")))
+        if score:
+            scored.append((-score, page["title"].lower(), page))
+    scored.sort(key=lambda item: item[:2])
+    return [item[2] for item in scored[:limit]]
+
+
+def search_arch_wiki(query, limit=3):
+    """Best effort: the Arch Wiki's own search. Returns [] if it can't be reached."""
+    from urllib.parse import urlencode
+    words = meaningful_words(query)
+    if not words:
+        return []
+    stems = sorted(expand_word(words[0]) - {words[0]}, key=len)
+    term = " ".join([stems[0] if stems and words[0].endswith(("ing", "ed")) else words[0]] + words[1:])
+    url = f"{ARCH_WIKI_API}?" + urlencode({"action": "opensearch", "search": term,
+                                             "limit": limit, "format": "json"})
+    try:
+        data = json.loads(fetch_text(url, timeout=6))
+        return [{"title": t, "url": u, "description": ""} for t, u in zip(data[1], data[3])][:limit]
+    except (OSError, ValueError, IndexError, TypeError):
+        return []
+
+
+def open_link(url):
+    """Open a web page in the user's browser without tying up the terminal."""
+    opener = os.environ.get("ALIASMAKER_OPENER") or shutil.which("xdg-open")
+    if not opener:
+        print(f"I couldn't find a way to open your browser. Here's the link: {url}")
+        return False
+    subprocess.Popen([opener, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    return True
+
+
+def clippy(state, query):
+    """/clippy <topic>: show helpful links about a topic. It never runs the command."""
+    query = query.strip()
+    if not query:
+        print(f"Tell me what you want to know about, for example: /{HELPER_NAME} chrooting")
+        return 1
+    print(f"/{HELPER_NAME}: Here's what I found about \"{query}\". "
+          "(I'm only looking it up, not running anything.)\n")
+    index, online = wiki_index()
+    choices = []
+
+    wiki_pages = search_wiki(index["pages"], query) if index else []
+    if wiki_pages:
+        print("CachyOS wiki")
+        for page in wiki_pages:
+            choices.append(("link", page["url"]))
+            line = page["title"] + (f" - {page['description']}" if page["description"] else "")
+            print(f"  {len(choices)}) {line}\n     {page['url']}")
+        print()
+
+    arch_pages = search_arch_wiki(query) if online is not False else []
+    if arch_pages:
+        print("Arch Wiki")
+        for page in arch_pages:
+            choices.append(("link", page["url"]))
+            print(f"  {len(choices)}) {page['title']}\n     {page['url']}")
+        print()
+
+    library = state.library()
+    if library and library.get("programs"):
+        words = meaningful_words(query)
+        _, local = search_library(library["programs"], " ".join(words[:1]), limit=3)
+        local = [p for p in local if p["source"] == "manual"]
+        if local:
+            print("On this PC (manual pages, work without internet)")
+            for program in local:
+                choices.append(("manual", program["name"]))
+                print(f"  {len(choices)}) {program['name']} - {program['description']}"
+                      f"   (manual: man {program['name']})")
+            print()
+
+    if online is False:
+        note = ("You seem to be offline, so I can't refresh the wiki list or open web pages."
+                if index else "You seem to be offline, so I can't look anything up on the wiki.")
+        print(note)
+    if not choices:
+        print(f"I didn't find anything about \"{query}\". Try a different word, "
+              "or search the programs on this PC with: doit search <words>")
+        return 1
+    if not interactive():
+        return 0
+    number = ask(f"Open one? Type a number 1-{len(choices)} (Enter to skip): ")
+    number = (number or "").strip()
+    if not number.isdigit() or not 1 <= int(number) <= len(choices):
+        return 0
+    kind, target = choices[int(number) - 1]
+    if state.dry_run:
+        print(f"[dry run] Would open: {'man ' + target if kind == 'manual' else target}")
+        return 0
+    if kind == "manual":
+        return read_manual_page(target)
+    return 0 if open_link(target) else 1
+
+
+def read_manual_page(name):
+    if not shutil.which("man"):
+        print("Manual pages aren't installed. Install them with: sudo pacman -S man-db man-pages")
+        return 1
+    return subprocess.run(["man", name]).returncode
 
 
 # ---------- the session ----------
@@ -573,6 +813,8 @@ def match_builtin(norm):
         return ("version", None)
     if words[0] == "search":
         return ("search", " ".join(words[1:]))
+    if words[0] in (HELPER_NAME, "/" + HELPER_NAME):
+        return ("clippy", " ".join(words[1:]))
     if words[0] == "forget" and len(words) > 1:
         return ("forget", " ".join(words[1:]))
     if len(words) == 2 and words[0] == "logging" and words[1] in ("on", "off"):
@@ -607,6 +849,8 @@ def run_builtin(name, arg, state):
         state._library = scan_library()
         describe_scan(state._library)
         return 0
+    if name == "clippy":
+        return clippy(state, arg)
     if name == "search":
         return cli_search(state, arg)
     if name == "custom":

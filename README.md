@@ -29,6 +29,28 @@ Let'sdostuff~/Games ❯
 
 The folder after it still tells you where you are (`~` is your home folder), and the ❯ turns red when the last command failed. It's still the same fish underneath, with all your settings, and only inside Alias Maker.
 
+**/clippy, the helper:** type `/clippy` and what you're wondering about, and it looks it up instead of running anything:
+
+```
+Let'sdostuff~ ❯ /clippy chrooting
+/clippy: Here's what I found about "chrooting". (I'm only looking it up, not running anything.)
+
+CachyOS wiki
+  1) CachyOS chroot Helper - Helper tool to make it easier to chroot into systems
+     https://wiki.cachyos.org/features/cachy_chroot/
+
+Arch Wiki
+  2) Chroot
+     https://wiki.archlinux.org/title/Chroot
+
+On this PC (manual pages, work without internet)
+  3) chroot - run command or interactive shell with special root directory   (manual: man chroot)
+
+Open one? Type a number 1-3 (Enter to skip):
+```
+
+Pick a number and the page opens in your browser, or the manual opens right in the terminal. Plain questions work too: `/clippy how do I set up gaming`. Without internet it still shows what's on your PC (and wiki pages it saw before). It's not AI: it only shows real pages. `doit clippy chrooting` does the same thing.
+
 The rest of the menu works like Konsole's: New Window, Copy, Paste, Full Screen, and font size, with the same shortcuts.
 
 ## Install
