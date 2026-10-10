@@ -66,23 +66,33 @@ The rest of the menu works like Konsole's: New Window, Copy, Paste, Full Screen,
 
 ## Install
 
-Works on a regular CachyOS install. First, the two packages the window needs (from CachyOS's official repos), plus manual pages so the Database has good descriptions:
+**The easy way: the installer.** Download `alias-maker-<version>-installer.run` (from the repo's **Releases** page), then in a terminal:
+
+```
+bash ~/Downloads/alias-maker-0.6.0-installer.run
+```
+
+It asks before doing anything, then:
+
+1. installs what Alias Maker needs from CachyOS's own repos (GTK 4, VTE, PyGObject), and offers the recommended extras that are missing (fish, fastfetch, manual pages, xdg-utils)
+2. builds Alias Maker into a normal pacman package and installs it
+
+It asks for your password; run it as yourself, not with `sudo`. Afterwards, open **Alias Maker** from your app launcher, or type `aliasmaker`. To make it your default terminal: System Settings → Default Applications → Terminal emulator → Alias Maker.
+
+To uninstall: `bash alias-maker-0.6.0-installer.run --uninstall`, or `sudo pacman -R alias-maker`. Your own commands and settings (`~/.config/alias-maker`, `~/.local/share/alias-maker`) are kept either way.
+
+**From the source (for working on Alias Maker itself):**
 
 ```
 sudo pacman -S vte4 python-gobject man-db man-pages
-```
-
-Then:
-
-```
 git clone https://github.com/theStyleWithin/Alias-maker.git
 cd Alias-maker
 ./install.sh
 ```
 
-The repo is private, so `git clone` will ask you to sign in to GitHub. You can also use **Code → Download ZIP** on the repo page and unzip it.
+`install.sh` runs Alias Maker straight from the cloned folder, for your user only. The repo is private, so `git clone` will ask you to sign in to GitHub. Don't use both ways at once: the `install.sh` copy in `~/.local/bin` would run instead of the installed one.
 
-Open **Alias Maker** from your app launcher (or type `aliasmaker`). To make it your default terminal: System Settings → Default Applications → Terminal emulator → Alias Maker.
+**Making the installer:** `packaging/build-installer.sh` builds `dist/alias-maker-<version>-installer.run` from the last commit. It carries `packaging/arch/PKGBUILD` and the source, and runs `makepkg` on the user's PC.
 
 ## Inside the terminal
 

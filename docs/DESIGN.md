@@ -34,6 +34,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Part | Status |
 |---|---|
 | Wrapper: plain-English phrases run real commands | Built (`src/doit`) |
+| Installer: one `.run` file that builds and installs a pacman package (`packaging/`) | Built; the package layout, the installed copy and the installer's steps were tested, but pacman and makepkg themselves only run on a real Arch/CachyOS PC |
 | Six ready-made commands turned into examples (no built-in phrases) | Built |
 | One-word commands become real fish commands (Alias Maker's conf.d file), with naming help; they work at once in open Alias Maker windows | Built; the fish side tested with real fish 4.0 |
 | "Do what? I am waiting..." prompt | Built |
