@@ -117,6 +117,8 @@ cd Alias-maker
 
 To publish a version, change `VERSION` in `src/aliasmaker_core.py` on `main`. The Release workflow (`.github/workflows/release.yml`) then runs the tests, builds every package and publishes a release with all of them: the installer (`packaging/build-installer.sh`), the AppImages (`packaging/build-appimage.sh`), and the pacman package and AUR files (`packaging/build-arch.sh`, run in an Arch container). The installer carries `packaging/arch/PKGBUILD` and the source, and runs `makepkg` on the user's PC.
 
+**Scanning a build before sharing it.** The `Debug build (private draft)` workflow (Actions tab → Run workflow) builds the AppImages from any branch and puts them in a draft release that only people who can write to this repo can see, with a `SHA256SUMS` file, so they can be scanned for viruses first. It doesn't touch the public releases.
+
 **AUR and Flathub: packagers wanted.** Alias Maker's author doesn't publish on the AUR or Flathub. Anyone is welcome to package it there under their own account. Every release carries hand-off kits, `alias-maker-aur-handoff.tar.gz` (ready to publish) and `alias-maker-flathub-handoff.tar.gz` (a manifest plus the code changes a Flatpak needs). See [packaging/handoff](packaging/handoff/README.md).
 
 ## What Alias Maker runs on your PC
