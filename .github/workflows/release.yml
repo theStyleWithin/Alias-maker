@@ -101,7 +101,7 @@ jobs:
           v="${{ needs.check.outputs.version }}"
           mv dist/aur dist/alias-maker-aur-handoff
           tar -czf dist/alias-maker-aur-handoff.tar.gz -C dist alias-maker-aur-handoff
-          cat > notes.md <<EOF
+          cat > body.md <<EOF
           Alias Maker $v for CachyOS. This is a test version: please report anything that goes wrong.
 
           **Pick one way to install:**
@@ -116,6 +116,8 @@ jobs:
 
           **If something goes wrong:** open **Alias Maker Debug** (from your app launcher, ☰ → Report a Problem, \`aliasmaker-debug\`, or the Debug AppImage), click **Save Everything for the Developer**, and send the file it makes. It never includes what you typed in the terminal, and you can read every word before sending it.
           EOF
+          # The not-tested-yet warning goes at the top and again at the end.
+          { cat packaging/release-warning.md; echo; cat body.md; echo; cat packaging/release-warning.md; } > notes.md
           gh release create "v$v" \
             "dist/alias-maker-$v-installer.run" dist/alias-maker-installer.run \
             dist/alias-maker-$v-*.pkg.tar.zst \
@@ -123,4 +125,14 @@ jobs:
             "dist/alias-maker-$v.tar.gz" dist/alias-maker-aur-handoff.tar.gz dist/alias-maker-flathub-handoff.tar.gz \
             --target "$GITHUB_SHA" --title "Alias Maker $v" \
             --notes-file notes.md --generate-notes
+
+      - name: Put the warning on older releases too
+        run: |
+          warning=$(cat packaging/release-warning.md)
+          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+            body=$(gh release view "$tag" --json body --jq .body)
+            case "$body" in *"has not been tested on a real machine"*) continue ;; esac
+            printf '%s\n\n%s\n\n%s\n' "$warning" "$body" "$warning" > old-notes.md
+            gh release edit "$tag" --notes-file old-notes.md
+          done
 
