@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"], "clippy_web": None}
@@ -1468,6 +1468,10 @@ AI_PROVIDERS = {
                "key_start": "sk-ant-", "key_page": "console.anthropic.com"},
     "grok": {"name": "Grok", "company": "xAI", "base": "https://api.x.ai",
              "key_start": "xai-", "key_page": "console.x.ai"},
+    # Any other service that speaks the same format as Grok and many others (OpenAI-style): the
+    # person gives its web address, e.g. https://api.example.com/v1
+    "custom": {"name": "AI service", "company": "that service", "base": None,
+               "key_start": None, "key_page": "the service's website"},
 }
 AI_QUIT_WORDS = {"/bye", "bye", "exit", "quit", "/exit", "/quit", "never mind", "goodbye"}
 AI_MAX_TURNS = 20
@@ -1511,13 +1515,50 @@ def ai_provider_for_key(key):
     """Which service a key belongs to, from how it starts (None if it isn't one we know)."""
     key = (key or "").strip()
     for name, info in AI_PROVIDERS.items():
-        if key.startswith(info["key_start"]):
+        if info["key_start"] and key.startswith(info["key_start"]):
             return name
     return None
 
 
+def ai_clean_base_url(text):
+    """A web address for an OpenAI-style service: (address, None), or (None, what's wrong).
+    It must be https (plain http only for this PC itself), with no password in it."""
+    from urllib.parse import urlsplit
+    text = (text or "").strip()
+    if not text:
+        return None, "Type the service's web address, for example https://api.example.com/v1"
+    try:
+        parts = urlsplit(text)
+        host = parts.hostname
+        parts.port  # noqa: B018  (raises if the port isn't a number)
+    except ValueError:
+        return None, "That doesn't look like a web address."
+    local = host in ("localhost", "127.0.0.1", "::1")
+    if parts.scheme != "https" and not (parts.scheme == "http" and local):
+        return None, "The address must start with https:// so your key travels safely."
+    if not host or parts.username or parts.password or parts.query or parts.fragment or len(text) > 300:
+        return None, "That doesn't look like a plain web address (no passwords or extras in it)."
+    path = parts.path.rstrip("/")
+    for tail in ("/chat/completions", "/models"):
+        if path.endswith(tail):
+            path = path[: -len(tail)]
+    return f"{parts.scheme}://{parts.netloc}{path}", None
+
+
+def ai_info(config):
+    """Names to show for the service in use: {"name", "company", "key_page"}."""
+    info = dict(AI_PROVIDERS.get(config.get("provider"), AI_PROVIDERS["custom"]))
+    if config.get("provider") == "custom":
+        from urllib.parse import urlsplit
+        host = urlsplit(config.get("base_url") or "").hostname or "that service"
+        info.update(name=host, company=host, key_page=host)
+    return info
+
+
 def ai_ready(config):
-    return bool(config.get("enabled") and config.get("key") and config.get("provider") in AI_PROVIDERS)
+    if not (config.get("enabled") and config.get("key") and config.get("provider") in AI_PROVIDERS):
+        return False
+    return config["provider"] != "custom" or ai_clean_base_url(config.get("base_url"))[0] is not None
 
 
 def ai_request(config, method, path, body=None, timeout=60):
@@ -1525,8 +1566,13 @@ def ai_request(config, method, path, body=None, timeout=60):
     the key never appears in an error."""
     import urllib.error
     import urllib.request
-    provider = AI_PROVIDERS[config["provider"]]
-    base = os.environ.get("ALIASMAKER_AI_BASE") or provider["base"]
+    provider = ai_info(config)
+    if config["provider"] == "custom":
+        base = config.get("base_url") or ""
+        if ai_clean_base_url(base)[0] is None:
+            raise AIError("The service's web address isn't set up right. Check it in ☰ → AI.")
+    else:
+        base = os.environ.get("ALIASMAKER_AI_BASE") or AI_PROVIDERS[config["provider"]]["base"]
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if config["provider"] == "claude":
         headers["x-api-key"] = config["key"]
@@ -1559,7 +1605,8 @@ def ai_request(config, method, path, body=None, timeout=60):
 
 def ai_models(config):
     """The models this key can use, as names (newest first as the service lists them)."""
-    answer = ai_request(config, "GET", "/v1/models?limit=100", timeout=20)
+    path = {"claude": "/v1/models?limit=100", "grok": "/v1/models", "custom": "/models"}[config["provider"]]
+    answer = ai_request(config, "GET", path, timeout=20)
     return [str(m["id"]) for m in answer.get("data", []) if isinstance(m, dict) and m.get("id")]
 
 
@@ -1625,7 +1672,7 @@ def ai_reply(config, history):
                             {"model": model, "max_tokens": 1024, "system": system, "messages": history})
         parts = [b.get("text", "") for b in answer.get("content", []) if isinstance(b, dict) and b.get("type") == "text"]
     else:
-        answer = ai_request(config, "POST", "/v1/chat/completions",
+        answer = ai_request(config, "POST", "/chat/completions" if config["provider"] == "custom" else "/v1/chat/completions",
                             {"model": model, "max_tokens": 1024,
                              "messages": [{"role": "system", "content": system}] + history})
         try:
@@ -1642,8 +1689,13 @@ def ai_first_notice(config):
     """Say once, plainly, what goes where. Returns False if they'd rather not."""
     if config.get("notice_seen"):
         return True
-    info = AI_PROVIDERS[config["provider"]]
-    print(f"This chats with {info['name']} ({info['company']}), using your own key.")
+    info = ai_info(config)
+    if config["provider"] == "custom":
+        print(f"This chats with {info['name']}, a service you chose yourself, using your own key.")
+        print(f"  - It isn't one of the built-in services: your key and what you type go to {info['name']},")
+        print("    so only use a service you trust.")
+    else:
+        print(f"This chats with {info['name']} ({info['company']}), using your own key.")
     print(f"  - What you type here is sent to {info['company']}, and nothing else is: no files, nothing")
     print("    from your screen or terminal. I also tell it which Linux you use so answers fit.")
     print("  - It can't run anything on your PC, and nothing it writes is run. If it suggests a")
@@ -1768,7 +1820,7 @@ def ai_chat(first_message=""):
     if not ai_first_notice(config):
         return 0
     state = State([], load_settings(), False)
-    info = AI_PROVIDERS[config["provider"]]
+    info = ai_info(config)
     set_window_title(f"AI chat with {info['name']}")
     show_chat_banner(info, config.get("model"))
     history = []
@@ -1837,12 +1889,18 @@ def ai_setup():
         return 0
     provider = ai_provider_for_key(key)
     if provider is None:
-        answer = normalize(ask("I don't recognise that key. Is it for claude or grok? ") or "")
-        provider = answer if answer in AI_PROVIDERS else None
+        answer = normalize(ask("I don't recognise that key. Is it for claude, grok, or another service (type other)? ") or "")
+        provider = answer if answer in AI_PROVIDERS else ("custom" if answer == "other" else None)
         if provider is None:
             print("Okay, nothing saved.")
             return 1
     config = {"provider": provider, "key": key, "enabled": True}
+    if provider == "custom":
+        base, problem = ai_clean_base_url(ask("Its web address (for example https://api.example.com/v1): "))
+        if problem:
+            print(problem)
+            return 1
+        config["base_url"] = base
     print("Checking the key...")
     try:
         models, config["model"] = ai_check(config)
@@ -1850,7 +1908,7 @@ def ai_setup():
         print(error)
         return 1
     ai_save(config)
-    print(f"Saved. Using {AI_PROVIDERS[provider]['name']}, model {config['model']}. Start chatting with: doit ai")
+    print(f"Saved. Using {ai_info(config)['name']}, model {config['model']}. Start chatting with: doit ai")
     return 0
 
 
@@ -1877,7 +1935,7 @@ def ai_command(state, arg):
         if not config.get("key"):
             print("The AI helper isn't set up. (☰ → AI, or doit ai setup)")
         else:
-            info = AI_PROVIDERS.get(config.get("provider"), {"name": "unknown"})
+            info = ai_info(config)
             print(f"AI helper: {'on' if config.get('enabled') else 'off'}, {info['name']}, "
                   f"model {config.get('model') or 'not chosen'}. The key is saved on this PC, not shown.")
         return 0

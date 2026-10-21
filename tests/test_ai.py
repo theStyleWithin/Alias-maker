@@ -39,9 +39,9 @@ class FakeAI:
                     data = b"<html>not json"
                 elif outer.status != 200:
                     data = b'{"error": "nope"}'
-                elif self.path.startswith("/v1/models"):
+                elif self.path.split("?")[0].endswith("/models"):
                     data = json.dumps({"data": [{"id": m} for m in outer.models]}).encode()
-                elif self.path == "/v1/messages":
+                elif self.path.split("?")[0].endswith("/messages"):
                     data = json.dumps({"content": [{"type": "text", "text": outer.reply}]}).encode()
                 else:
                     data = json.dumps({"choices": [{"message": {"content": outer.reply}}]}).encode()
@@ -472,6 +472,117 @@ class TestChatIsNotTheTerminal(AITestCase):
         self.assertIn("never pretend it ran", text)
         self.assertIn("fenced code block", text)
         self.assertIn("after leaving this chat with /bye", text)
+
+
+class TestOtherServices(AITestCase):
+    """"Other service (OpenAI-style)": the person types a web address and a key."""
+
+    def custom(self, **extra):
+        config = {"provider": "custom", "key": "sk-whatever-123456", "enabled": True,
+                  "base_url": self.ai.base + "/v1", "model": "some-model", "notice_seen": True}
+        config.update(extra)
+        return config
+
+    def test_web_addresses_are_checked_and_tidied(self):
+        good = {
+            "https://api.tokenreply.com/v1": "https://api.tokenreply.com/v1",
+            "https://api.tokenreply.com/v1/": "https://api.tokenreply.com/v1",
+            " https://api.example.com ": "https://api.example.com",
+            "https://api.example.com/v1/chat/completions": "https://api.example.com/v1",
+            "https://api.example.com/v1/models": "https://api.example.com/v1",
+            "https://api.example.com:8443/openai/v1": "https://api.example.com:8443/openai/v1",
+            "http://127.0.0.1:8080/v1": "http://127.0.0.1:8080/v1",
+            "http://localhost:11434/v1": "http://localhost:11434/v1",
+        }
+        for typed, expect in good.items():
+            self.assertEqual(doit.ai_clean_base_url(typed), (expect, None), typed)
+        for bad in ("", "   ", "api.example.com/v1", "http://api.example.com/v1", "ftp://api.example.com",
+                    "javascript:alert(1)", "https://user:pass@api.example.com/v1", "https://api.example.com/v1?key=1",
+                    "https://api.example.com/v1#x", "https://", "https://api.example.com:notaport/v1",
+                    "https://" + "a" * 400 + ".com"):
+            address, problem = doit.ai_clean_base_url(bad)
+            self.assertIsNone(address, bad)
+            self.assertTrue(problem, bad)
+
+    def test_it_talks_in_grok_s_format_at_the_address_given(self):
+        config = self.custom()
+        models, chosen = doit.ai_check(config)
+        self.assertEqual(chosen, self.ai.models[0])
+        request = self.ai.requests[0]
+        self.assertEqual((request["method"], request["path"]), ("GET", "/v1/models"))
+        self.assertEqual(request["headers"]["authorization"], "Bearer sk-whatever-123456")
+        self.assertNotIn("x-api-key", request["headers"])
+        self.assertEqual(doit.ai_reply(config, [{"role": "user", "content": "hi"}]), "Try the unzip command.")
+        sent = self.ai.requests[1]
+        self.assertEqual(sent["path"], "/v1/chat/completions")
+        self.assertEqual(set(sent["body"]), {"model", "max_tokens", "messages"}, "no tools, no files")
+        self.assertEqual(sent["body"]["messages"][0]["role"], "system")
+
+    def test_an_address_without_v1_is_used_as_typed(self):
+        config = self.custom(base_url=self.ai.base)
+        doit.ai_models(config)
+        self.assertEqual(self.ai.requests[0]["path"], "/models")
+
+    def test_the_test_server_override_never_redirects_a_custom_address(self):
+        other = FakeAI()
+        self.addCleanup(other.stop)
+        os.environ["ALIASMAKER_AI_BASE"] = other.base
+        doit.ai_models(self.custom())
+        self.assertEqual(other.requests, [])
+        self.assertEqual(len(self.ai.requests), 1)
+
+    def test_a_bad_saved_address_is_refused_before_anything_is_sent(self):
+        for base in ("", "http://api.example.com/v1", "https://user:pw@api.example.com"):
+            with self.assertRaises(doit.AIError) as caught:
+                doit.ai_models(self.custom(base_url=base))
+            self.assertIn("web address", str(caught.exception))
+        self.assertEqual(self.ai.requests, [])
+        self.assertFalse(doit.ai_ready(self.custom(base_url="")))
+        self.assertTrue(doit.ai_ready(self.custom()))
+
+    def test_errors_name_the_service_by_its_address_and_never_show_the_key(self):
+        config = self.custom()
+        self.ai.status = 401
+        with self.assertRaises(doit.AIError) as caught:
+            doit.ai_models(config)
+        self.assertIn("127.0.0.1", str(caught.exception))
+        self.assertNotIn("sk-whatever", str(caught.exception))
+
+    def test_the_first_chat_warns_that_it_is_not_a_built_in_service(self):
+        doit.ai_save(self.custom(base_url="http://localhost:9/v1", notice_seen=False))
+        code, out, _ = self.run_doit(["ai"], answers=["no"])
+        self.assertIn("a service you chose yourself", out)
+        self.assertIn("only use a service you trust", out)
+        self.assertIn("localhost", out)
+        self.assertEqual(self.ai.requests, [])
+
+    def test_a_chat_works_and_the_banner_names_the_service(self):
+        doit.ai_save(self.custom())
+        _, out, _ = self.run_doit(["ai"], answers=["how do I unzip", "/bye"])
+        self.assertIn("AI CHAT with 127.0.0.1", out)
+        self.assertIn(doit.AI_BAR + "Try the unzip command.", out)
+
+    def test_typing_the_key_in_a_terminal_for_another_service(self):
+        with mock.patch.object(getpass, "getpass", return_value="sk-mystery-key-1"):
+            code, out, _ = self.run_doit(["ai", "setup"], answers=["other", self.ai.base + "/v1/"])
+        self.assertEqual(code, 0, out)
+        saved = doit.ai_load()
+        self.assertEqual((saved["provider"], saved["base_url"]), ("custom", self.ai.base + "/v1"))
+        self.assertEqual(saved["model"], self.ai.models[0])
+        _, out, _ = self.run_doit(["ai", "status"])
+        self.assertIn("127.0.0.1", out)
+        self.assertNotIn("sk-mystery", out)
+
+    def test_a_wrong_address_in_setup_saves_nothing(self):
+        with mock.patch.object(getpass, "getpass", return_value="sk-mystery-key-1"):
+            code, out, _ = self.run_doit(["ai", "setup"], answers=["other", "http://example.com/v1"])
+        self.assertEqual(code, 1)
+        self.assertIn("https://", out)
+        self.assertEqual(doit.ai_load(), {})
+        self.assertEqual(self.ai.requests, [])
+
+    def test_a_key_that_looks_like_neither_built_in_service_is_not_guessed(self):
+        self.assertIsNone(doit.ai_provider_for_key("sk-s78AoQ391Tc4IGNWrnFUMQ3vBV"))
 
 
 class TestSetupAndSettings(AITestCase):

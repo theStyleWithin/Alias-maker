@@ -123,6 +123,51 @@ class TestAIWindow(AITestCase):
         self.win.switch.set_active(True)
         self.assertTrue(doit.ai_load()["enabled"])
 
+    def test_another_service_needs_its_web_address(self):
+        self.win.key.set_text("sk-mystery-key-1")
+        self.win.check_key()
+        self.assertTrue(self.win.provider_pick.get_visible())
+        self.assertFalse(self.win.address_row.get_visible())
+        self.win.provider_pick.set_selected(2)
+        self.assertTrue(self.win.address_row.get_visible(), "the address box appears for Other service")
+        self.win.check_key()
+        self.assertIn("web address", self.win.message.get_label())
+        self.win.address.set_text("http://not-secure.example.com/v1")
+        self.win.check_key()
+        self.assertIn("https://", self.win.message.get_label())
+        self.assertEqual(self.ai.requests, [])
+        self.assertEqual(doit.ai_load(), {})
+
+    def test_another_service_is_saved_and_shown_by_its_address(self):
+        self.win.key.set_text("sk-mystery-key-1")
+        self.win.check_key()
+        self.win.provider_pick.set_selected(2)
+        self.win.address.set_text(self.ai.base + "/v1/")
+        self.win.check_key()
+        self.assertTrue(self.spin(lambda: not self.win.checking))
+        saved = doit.ai_load()
+        self.assertEqual((saved["provider"], saved["base_url"]), ("custom", self.ai.base + "/v1"))
+        self.assertIn("127.0.0.1", self.win.service.get_label())
+        self.assertTrue(self.win.address_row.get_visible())
+        self.assertEqual(self.win.address.get_text(), self.ai.base + "/v1")
+        self.assertTrue(self.win.switch.get_active())
+        self.assertEqual(self.ai.requests[0]["path"], "/v1/models")
+
+    def test_a_built_in_key_hides_the_address_box(self):
+        self.check_with(CLAUDE_KEY)
+        self.assertFalse(self.win.address_row.get_visible())
+
+    def test_the_saved_address_can_be_changed_without_typing_the_key_again(self):
+        doit.ai_save({"provider": "custom", "key": "sk-mystery-key-1", "enabled": True,
+                      "base_url": "https://old.example.com/v1", "model": "m"})
+        self.win.reload()
+        self.assertEqual(self.win.address.get_text(), "https://old.example.com/v1")
+        self.win.address.set_text(self.ai.base + "/v1")
+        self.win.check_key()
+        self.assertTrue(self.spin(lambda: not self.win.checking))
+        saved = doit.ai_load()
+        self.assertEqual((saved["key"], saved["base_url"]), ("sk-mystery-key-1", self.ai.base + "/v1"))
+
     def test_the_chat_button_types_doit_ai_into_the_terminal(self):
         self.check_with(CLAUDE_KEY)
         self.win.chat.emit("clicked")

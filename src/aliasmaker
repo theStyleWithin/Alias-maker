@@ -1470,6 +1470,8 @@ class AIWindow(Gtk.Window):
         layout.append(section_heading("Your API key"))
         layout.append(text_label("Paste a key from Anthropic (Claude, starts with sk-ant-) or from xAI "
                                  "(Grok, starts with xai-). The key decides which one you talk to. "
+                                 "Any other service that works the same way as Grok's (most do) "
+                                 "can be used too: pick \"Other service\" and type its web address. "
                                  "Only the key is needed: these services don't take an account "
                                  "username or password.", "dim-label"))
         key_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -1488,11 +1490,24 @@ class AIWindow(Gtk.Window):
         service_row.append(text_label("Talks to:", wrap=False))
         self.service = text_label("", wrap=False)
         self.service.set_hexpand(True)
-        self.provider_pick = Gtk.DropDown.new_from_strings(["Claude (Anthropic)", "Grok (xAI)"])
+        self.provider_pick = Gtk.DropDown.new_from_strings(
+            ["Claude (Anthropic)", "Grok (xAI)", "Other service (OpenAI-style)"])
         self.provider_pick.set_visible(False)
+        self.provider_pick.connect("notify::selected", lambda *_: self.show_address())
         service_row.append(self.service)
         service_row.append(self.provider_pick)
         layout.append(service_row)
+
+        self.address_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.address_row.append(text_label("Web address:", wrap=False))
+        self.address = Gtk.Entry()
+        self.address.set_placeholder_text("https://api.example.com/v1")
+        self.address.set_hexpand(True)
+        self.address.set_tooltip_text("The service's API address (often called Base URL). It must start with https://. "
+                                      "Your key and your chat messages are sent there, so only use a service you trust.")
+        self.address_row.append(self.address)
+        self.address_row.set_visible(False)
+        layout.append(self.address_row)
 
         model_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         model_row.append(text_label("Model:", wrap=False))
@@ -1542,10 +1557,15 @@ class AIWindow(Gtk.Window):
                              else ("Off" if has_key else "Off: add a key first"))
         self.key.set_text("")
         self.key.set_tooltip_text("A key is saved (hidden). Paste a new one to replace it." if has_key else None)
-        self.service.set_label(
-            f"{core.AI_PROVIDERS[provider]['name']} ({core.AI_PROVIDERS[provider]['company']})"
-            if provider in core.AI_PROVIDERS else "(paste a key above)")
+        if provider == "custom":
+            self.service.set_label(core.ai_info(config)["name"] + " (a service you chose)")
+        elif provider in core.AI_PROVIDERS:
+            self.service.set_label(f"{core.AI_PROVIDERS[provider]['name']} ({core.AI_PROVIDERS[provider]['company']})")
+        else:
+            self.service.set_label("(paste a key above)")
         self.provider_pick.set_visible(False)
+        self.address.set_text(config.get("base_url", "") if provider == "custom" else "")
+        self.address_row.set_visible(provider == "custom")
         self.set_models([config["model"]] if config.get("model") else [], config.get("model"))
         self.chat.set_sensitive(core.ai_ready(config))
         self.forget.set_sensitive(has_key)
@@ -1566,6 +1586,11 @@ class AIWindow(Gtk.Window):
         self.message.add_css_class(kind)
         self.message.set_label(text)
         self.message.set_visible(True)
+
+    def show_address(self):
+        """The web address box is only for "Other service"."""
+        if self.provider_pick.get_visible():
+            self.address_row.set_visible(self.provider_pick.get_selected() == 2)
 
     # --- actions ---
 
@@ -1606,15 +1631,23 @@ class AIWindow(Gtk.Window):
             return
         if typed:
             provider = core.ai_provider_for_key(typed)
-            if provider is None:
+            if provider is None and not self.provider_pick.get_visible():
                 self.provider_pick.set_visible(True)
-                provider = ("claude", "grok")[self.provider_pick.get_selected()]
-                self.say("I don't recognise that key, so I'm using the service picked above. "
-                         "Press the button again if that's right.", "error")
-                if not getattr(self, "asked_provider", False):
-                    self.asked_provider = True
-                    return
+                self.say("I don't recognise that key. Pick which service it is for below "
+                         "(choose \"Other service\" and type its web address if it's not Claude or Grok), "
+                         "then press the button again.", "error")
+                return
+            if provider is None:
+                provider = ("claude", "grok", "custom")[self.provider_pick.get_selected()]
             config["provider"] = provider
+        provider = config.get("provider")
+        if provider == "custom":
+            base, problem = core.ai_clean_base_url(self.address.get_text() or config.get("base_url", ""))
+            if problem:
+                self.address_row.set_visible(True)
+                self.say(problem, "error")
+                return
+            config["base_url"] = base
         self.checking = True
         self.check.set_sensitive(False)
         self.say("Checking the key...", "success")
@@ -1653,7 +1686,6 @@ class AIWindow(Gtk.Window):
             self.forget.set_label("Click again to delete the key")
             return
         core.ai_forget()
-        self.asked_provider = False
         self.reload()
         self.say("Done. The key and AI settings are deleted from this PC.", "success")
 
