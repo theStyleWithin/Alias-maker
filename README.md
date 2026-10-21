@@ -93,6 +93,15 @@ To uninstall: `bash alias-maker-installer.run --uninstall`, or `sudo pacman -R a
 - **AppImage:** [Alias-Maker-x86_64.AppImage](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/Alias-Maker-x86_64.AppImage), nothing to install. It uses your PC's GTK 4 and VTE (CachyOS: `sudo pacman -S vte4 python-gobject`) and says what's missing if they aren't there. Make it runnable (right-click → Properties → Allow executing, or `chmod +x`), then double-click it. One-word commands you make in it keep working in other terminals as long as the AppImage file stays where it is.
 - **Alias Maker Debug as an AppImage:** [Alias-Maker-Debug-x86_64.AppImage](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/Alias-Maker-Debug-x86_64.AppImage), for testers whose Alias Maker won't start at all. Without GTK it still saves the report and says where.
 
+**Antivirus warnings about the AppImage.** A few antivirus engines (for example on VirusTotal) flag AppImages in general: the small launcher inside every AppImage is a compressed, self-unpacking program, and that looks like a packed virus to them. Alias Maker's AppImage was checked file by file: it's AppImage's official, unmodified launcher plus Alias Maker's own Python and shell files from this repo, nothing else. It's a false positive. To check that a download is the genuine one, built by GitHub from this repo's public source (each release has a `SHA256SUMS` file and a signed build record):
+
+```
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify Alias-Maker-x86_64.AppImage --repo theStyleWithin/Alias-maker
+```
+
+If you'd rather avoid AppImages, the installer and the pacman package hold plain scripts and files you can read.
+
 **From the source (for working on Alias Maker itself):**
 
 ```

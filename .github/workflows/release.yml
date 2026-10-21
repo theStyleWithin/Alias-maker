@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write      # signing the build provenance
+  attestations: write
 
 concurrency:
   group: release
@@ -96,11 +98,29 @@ jobs:
         with:
           name: arch
           path: dist/
-      - name: Publish the release
+      - name: Gather the files and their checksums
         run: |
           v="${{ needs.check.outputs.version }}"
           mv dist/aur dist/alias-maker-aur-handoff
           tar -czf dist/alias-maker-aur-handoff.tar.gz -C dist alias-maker-aur-handoff
+          mkdir release
+          cp "dist/alias-maker-$v-installer.run" dist/alias-maker-installer.run \
+            dist/alias-maker-$v-*.pkg.tar.zst \
+            dist/Alias-Maker-x86_64.AppImage dist/Alias-Maker-Debug-x86_64.AppImage \
+            "dist/alias-maker-$v.tar.gz" dist/alias-maker-aur-handoff.tar.gz dist/alias-maker-flathub-handoff.tar.gz \
+            release/
+          (cd release && sha256sum -- * > SHA256SUMS)
+
+      # A signed record that GitHub built these files from this repo's source, so anyone can
+      # check a download is genuine (gh attestation verify <file> --repo theStyleWithin/Alias-maker).
+      - name: Prove where the files came from
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release/*
+
+      - name: Publish the release
+        run: |
+          v="${{ needs.check.outputs.version }}"
           cat > body.md <<EOF
           Alias Maker $v for CachyOS. This is a test version: please report anything that goes wrong.
 
@@ -115,14 +135,17 @@ jobs:
           | \`alias-maker-aur-handoff.tar.gz\`, \`alias-maker-flathub-handoff.tar.gz\` | For packagers: Alias Maker isn't published on the AUR or Flathub by its author. Anyone is welcome to; these kits are a head start (read the README inside). |
 
           **If something goes wrong:** open **Alias Maker Debug** (from your app launcher, ☰ → Report a Problem, \`aliasmaker-debug\`, or the Debug AppImage), click **Save Everything for the Developer**, and send the file it makes. It never includes what you typed in the terminal, and you can read every word before sending it.
+
+          **Antivirus warnings:** a few antivirus engines flag AppImages in general, because the small AppImage launcher inside every one looks like a packed program to them. Alias Maker's AppImage is AppImage's official launcher plus Alias Maker's own Python and shell files, nothing else. To check a download is the genuine one, built by GitHub from this repo's public source:
+
+              sha256sum -c SHA256SUMS --ignore-missing
+              gh attestation verify Alias-Maker-x86_64.AppImage --repo theStyleWithin/Alias-maker
+
+          If you'd rather avoid AppImages, the installer and the pacman package are plain scripts and files you can read.
           EOF
           # The not-tested-yet warning goes at the top and again at the end.
           { cat packaging/release-warning.md; echo; cat body.md; echo; cat packaging/release-warning.md; } > notes.md
-          gh release create "v$v" \
-            "dist/alias-maker-$v-installer.run" dist/alias-maker-installer.run \
-            dist/alias-maker-$v-*.pkg.tar.zst \
-            dist/Alias-Maker-x86_64.AppImage dist/Alias-Maker-Debug-x86_64.AppImage \
-            "dist/alias-maker-$v.tar.gz" dist/alias-maker-aur-handoff.tar.gz dist/alias-maker-flathub-handoff.tar.gz \
+          gh release create "v$v" release/* \
             --target "$GITHUB_SHA" --title "Alias Maker $v" \
             --notes-file notes.md --generate-notes
 
