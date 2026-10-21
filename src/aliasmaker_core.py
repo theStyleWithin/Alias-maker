@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}
@@ -252,7 +252,7 @@ def load_custom():
 
 def save_custom(custom):
     write_json(custom_path(), {"version": 1, "commands": custom})
-    write_fish_shortcuts(custom)  # keep the real terminal commands in step
+    write_shortcuts(custom)  # keep the real terminal commands in step
 
 
 # Notes a command can carry when it was made from an example (e.g. Brave's installer link).
@@ -347,6 +347,21 @@ FISH_WORDS = {
     "source", "status", "string", "suspend", "switch", "test", "time", "trap", "true", "type",
     "ulimit", "umask", "vared", "wait", "while", "doit", "aliasmaker",
 }
+# bash's own keywords and built-in commands (compgen -k -b): a shortcut with one of these names
+# would break bash
+BASH_WORDS = {
+    "!", ".", ":", "[", "[[", "]]", "{", "}", "alias", "bg", "bind", "break", "builtin", "caller",
+    "case", "cd", "command", "compgen", "complete", "compopt", "continue", "coproc", "declare",
+    "dirs", "disown", "do", "done", "echo", "elif", "else", "enable", "esac", "eval", "exec",
+    "exit", "export", "false", "fc", "fg", "fi", "for", "function", "getopts", "hash", "help",
+    "history", "if", "in", "jobs", "kill", "let", "local", "logout", "mapfile", "popd", "printf",
+    "pushd", "pwd", "read", "readarray", "readonly", "return", "select", "set", "shift", "shopt",
+    "source", "suspend", "test", "then", "time", "times", "trap", "true", "type", "typeset",
+    "ulimit", "umask", "unalias", "unset", "until", "wait", "while", "doit", "aliasmaker",
+}
+# Where bash gets its aliases and functions from (read, never run, to see which names are taken)
+BASH_CONFIG_FILES = ("/etc/bash.bashrc", "/etc/bashrc", "~/.bashrc", "~/.bash_aliases")
+NOT_A_SHELL = {"nologin", "false", "true", "git-shell"}
 FILLER_WORDS = {"just", "my", "the", "a", "an", "please", "me", "i", "some", "all", "really",
                 "to", "of", "for", "and", "it", "this", "that", "your", "our", "now"}
 SHORTCUTS_HEADER = """\
@@ -362,6 +377,68 @@ SHORTCUTS_HEADER = """\
 
 def fish_shortcuts_path():
     return config_dir().parent / "fish" / "conf.d" / "alias-maker.fish"
+
+
+def bash_shortcuts_path():
+    return config_dir() / "shortcuts.bash"
+
+
+def login_shell():
+    """The shell this PC gives you in a terminal: the one in your account, then $SHELL.
+    ALIASMAKER_SHELL=/path/to/shell picks a different one."""
+    candidates = [os.environ.get("ALIASMAKER_SHELL", "")]
+    try:
+        import pwd
+        candidates.append(pwd.getpwuid(os.getuid()).pw_shell)
+    except (ImportError, KeyError):
+        pass
+    candidates += [os.environ.get("SHELL", ""), "/bin/bash", "/bin/sh"]
+    for path in candidates:
+        if path and os.path.basename(path) not in NOT_A_SHELL and os.access(path, os.X_OK):
+            return path
+    return "/bin/sh"
+
+
+def shell_kind(path=None):
+    """"bash", "fish", "zsh"...: the shell's name, from its file name."""
+    return os.path.basename(path or login_shell())
+
+
+def shell_info():
+    """The login shell and its version, for the scan and the health check."""
+    path = login_shell()
+    version = ""
+    try:
+        result = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5,
+                                env=clean_env())
+        version = (result.stdout or result.stderr).strip().splitlines()[0] if (result.stdout or result.stderr) else ""
+    except (OSError, subprocess.TimeoutExpired, IndexError):
+        pass
+    return {"path": path, "name": shell_kind(path), "version": version}
+
+
+def shell_builtins(path):
+    """(name, description) for the shell's own commands (cd, export...): not programs, but
+    commands this PC understands. Only bash and fish are asked; others add nothing."""
+    kind = shell_kind(path)
+    try:
+        if kind == "bash":
+            script = 'for b in $(compgen -b; compgen -k); do help -d "$b" 2>/dev/null || echo "$b -"; done'
+            out = subprocess.run([path, "--norc", "--noprofile", "-c", script], capture_output=True,
+                                 text=True, timeout=20, env=clean_env()).stdout
+            found = []
+            for line in out.splitlines():
+                name, _, description = line.partition(" - ")
+                if name.strip() and " " not in name.strip():
+                    found.append((name.strip(), description.strip().rstrip("-").strip()))
+            return found
+        if kind == "fish":
+            out = subprocess.run([path, "--no-config", "-c", "builtin -n"], capture_output=True,
+                                 text=True, timeout=20, env=clean_env()).stdout
+            return [(name.strip(), "") for name in out.splitlines() if name.strip()]
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return []
 
 
 def doit_path():
@@ -395,13 +472,27 @@ def names_in_fish_file(path):
     return names
 
 
+def names_in_bash_file(path):
+    """Alias and function names defined in a bash config file."""
+    try:
+        text = Path(path).expanduser().read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return set()
+    names = set(re.findall(r"^\s*alias\s+(?:-\S+\s+)*([^\s=]+)=", text, re.M))
+    names |= set(re.findall(r"^\s*(?:function\s+)?([A-Za-z0-9_.+-]+)\s*\(\)", text, re.M))
+    names |= set(re.findall(r"^\s*function\s+([A-Za-z0-9_.+-]+)", text, re.M))
+    return names
+
+
 def shell_config_names():
-    """Names already used by CachyOS's fish config or the user's own fish setup."""
+    """Names already used by the user's fish or bash setup (CachyOS's fish config included)."""
     fish_dir = config_dir().parent / "fish"
     names = names_in_fish_file(CACHYOS_FISH_CONFIG) | names_in_fish_file(fish_dir / "config.fish")
     functions = fish_dir / "functions"
     if functions.is_dir():
         names |= {f.stem for f in functions.glob("*.fish")}
+    for config in BASH_CONFIG_FILES:
+        names |= names_in_bash_file(config)
     return names
 
 
@@ -416,10 +507,12 @@ def shell_name_problem(name):
         return "spaces", name.split()[0]
     if not SHELL_NAME.match(name):
         return "characters", None
+    if name in BASH_WORDS:
+        return "taken", "a built-in bash command"
     if name in FISH_WORDS:
         return "taken", "a built-in fish command"
     if name in shell_config_names():
-        return "taken", "a shortcut in your fish setup"
+        return "taken", "a shortcut in your shell setup"
     found = shutil.which(name)
     if found:
         return "taken", f"a program on your PC ({found})"
@@ -445,6 +538,43 @@ def name_suggestions(phrase):
     if len(short_words) < 2 or short_phrase == " ".join(words):
         return None, None, full
     return short_phrase, "-".join(short_words), full
+
+
+def fish_in_use():
+    """Whether fish is on this PC (so its shortcut file is worth writing)."""
+    return (config_dir().parent / "fish").is_dir() or bool(shutil.which("fish")) or shell_kind() == "fish"
+
+
+def write_shortcuts(custom=None):
+    """Keep the real terminal commands in step with the saved ones, for bash and for fish."""
+    written = write_bash_shortcuts(custom)
+    if fish_in_use():
+        write_fish_shortcuts(custom)
+    return written
+
+
+def write_bash_shortcuts(custom=None):
+    """Rewrite Alias Maker's bash file (read by the Alias Maker window) from the saved commands."""
+    custom = load_custom() if custom is None else custom
+    written = []
+    lines = [SHORTCUTS_HEADER]
+    doit = " ".join(shlex.quote(part) for part in doit_command())
+    for entry in custom:
+        name = entry["phrase"].strip()
+        if not works_on_its_own(name):
+            continue  # works with doit in front only
+        lines += [f"{name}() {{ {doit} --alias {shlex.quote(name)} -- \"$@\"; }}"]
+        written.append(name)
+    lines.append("")
+    path = bash_shortcuts_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".bash.tmp")
+        tmp.write_text("\n".join(lines), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as err:
+        print(f"Note: couldn't update {path}: {err}", file=sys.stderr)
+    return written
 
 
 def write_fish_shortcuts(custom=None):
@@ -478,8 +608,11 @@ def write_fish_shortcuts(custom=None):
 
 def where_shortcuts_work():
     """Where a new one-word command can be used right away."""
-    if in_alias_maker() and os.path.basename(os.environ.get("SHELL", "")) == "fish":
+    kind = shell_kind()
+    if in_alias_maker() and kind == "fish":
         return "(works right away in Alias Maker windows; other terminals need a new window)"
+    if kind == "bash":
+        return "(works in Alias Maker windows; other terminals only know doit <phrase>)"
     return "(in a new terminal window)"
 
 
@@ -676,8 +809,16 @@ def scan_library():
             description, source = "", "none"
         entries.append({"name": name, "path": path, "description": description,
                         "source": source, "package": package})
+    shell = shell_info()
+    for name, description in shell_builtins(shell["path"]):
+        if name not in programs:
+            entries.append({"name": name, "path": f"(built into {shell['name']})",
+                            "description": description or f"A {shell['name']} built-in command",
+                            "source": "shell", "package": shell["name"]})
+    entries.sort(key=lambda entry: entry["name"])
     this_os = detect_os()
     library = {
+        "shell": shell,
         "scanned_at": datetime.now().isoformat(timespec="seconds"),
         "os": {"id": this_os["id"], "name": this_os["name"]},
         "has_manuals": bool(shutil.which("whatis")),
@@ -1674,7 +1815,7 @@ def run_shortcut(state, name, extra):
     custom = state.custom_map.get(normalize(name))
     if custom is None:
         print(f"Alias Maker doesn't have a command called \"{name}\" anymore.")
-        write_fish_shortcuts()  # tidy the shortcut file; new terminal windows won't have it
+        write_shortcuts()  # tidy the shortcut files; new terminal windows won't have it
         return 127
     entry = custom_entry(custom, state)
     if extra:

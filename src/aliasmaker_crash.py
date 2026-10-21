@@ -539,7 +539,7 @@ def health_check():
     add(OK if py >= (3, 9) else BAD, "Python", platform.python_version()
         + ("" if py >= (3, 9) else " (too old: Alias Maker needs 3.9 or newer)"))
 
-    in_appimage = bool(os.environ.get("ALIASMAKER_BUNDLED_FISH"))
+    in_appimage = bool(os.environ.get("ALIASMAKER_DOIT_DIR"))
     code, out = _run([sys.executable, "-c", GI_PROBE])
     found = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
     if in_appimage:
@@ -569,17 +569,20 @@ def health_check():
     else:
         add(WARN, "Screen", "no desktop found (fine over SSH; the window needs a desktop)")
 
-    bundled_fish = os.environ.get("ALIASMAKER_BUNDLED_FISH", "")
-    fish = shutil.which("fish")
-    if bundled_fish and os.access(bundled_fish, os.X_OK):
-        _code, out = _run([bundled_fish, "--version"])
-        add(OK, "fish shell", f"{out.split('version')[-1].strip()} (built into the AppImage)")
-    elif fish:
-        _code, out = _run([fish, "--version"])
-        add(OK, "fish shell", out.split("version")[-1].strip() or "installed")
+    try:
+        import aliasmaker_core
+        shell_path = aliasmaker_core.login_shell()
+    except Exception:  # the health check must work even when the engine doesn't
+        shell_path = os.environ.get("SHELL", "")
+    kind = os.path.basename(shell_path) or "unknown"
+    _code, out = _run([shell_path, "--version"]) if shell_path else (None, "")
+    version = (out.splitlines() or [""])[0]
+    if kind in ("bash", "fish"):
+        add(OK, "Your shell", f"{version or kind}: Alias Maker keeps it as it is and only changes the "
+                              "prompt and title to Let'sdostuff~")
     else:
-        add(WARN, "fish shell", "not installed: no Let'sdostuff~ prompt, /clippy or one-word commands. "
-                                "Fix: sudo pacman -S fish")
+        add(WARN, "Your shell", f"{kind}: it works, but without the Let'sdostuff~ prompt, /clippy and "
+                                "one-word commands (those are for bash and fish)")
     for program, why, package in (("fastfetch", "PC info next to the DOIT logo", "fastfetch"),
                                   ("whatis", "descriptions in the Database", "man-db"),
                                   ("xdg-open", "opening /clippy results", "xdg-utils")):

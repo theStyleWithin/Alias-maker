@@ -42,7 +42,7 @@ modules:
       # Same layout as the Arch package: the app finds its files next to itself.
       - install -Dm755 -t /app/lib/alias-maker/src src/aliasmaker src/doit src/aliasmaker-debug
       - install -Dm644 -t /app/lib/alias-maker/src src/aliasmaker_core.py src/aliasmaker_crash.py
-      - install -Dm644 -t /app/lib/alias-maker/src/shell src/shell/lets-do-stuff.fish src/shell/doit-logo.txt
+      - install -Dm644 -t /app/lib/alias-maker/src/shell src/shell/lets-do-stuff.fish src/shell/lets-do-stuff.bash src/shell/doit-logo.txt
       - install -Dm644 -t /app/lib/alias-maker/data data/examples.json
       - install -dm755 /app/bin
       - ln -s ../lib/alias-maker/src/aliasmaker /app/bin/aliasmaker
