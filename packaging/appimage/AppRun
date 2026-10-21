@@ -1,0 +1,51 @@
+#!/bin/sh
+# Starts Alias Maker (or Alias Maker Debug) from the AppImage. It uses this PC's own
+# Python 3, GTK 4, VTE and PyGObject, so nothing it starts in the terminal is affected.
+#   ./Alias-Maker-x86_64.AppImage              the terminal window
+#   ./Alias-Maker-x86_64.AppImage doit ...     the doit command (one-word commands use this)
+#   ./Alias-Maker-x86_64.AppImage debug ...    Alias Maker Debug
+here="$(dirname "$(readlink -f "$0")")"
+app="$here/usr/lib/alias-maker/src"
+prog=@DEFAULT@
+
+case "$1" in
+    doit) shift; exec python3 "$app/doit" "$@" ;;
+    debug | aliasmaker-debug) shift; prog=aliasmaker-debug ;;
+    aliasmaker) shift; prog=aliasmaker ;;
+esac
+
+say() {
+    echo "$1" >&2
+    [ -t 2 ] && return
+    kdialog --title "$2" --msgbox "$1" 2>/dev/null ||
+        zenity --info --title="$2" --text="$1" 2>/dev/null ||
+        notify-send "$2" "$1" 2>/dev/null
+}
+
+if ! command -v python3 >/dev/null 2>&1; then
+    say "Alias Maker needs Python 3. On CachyOS / Arch: sudo pacman -S python" "Alias Maker"
+    exit 1
+fi
+
+if ! python3 -c "import gi; gi.require_version('Gtk', '4.0'); gi.require_version('Vte', '3.91')" 2>/dev/null; then
+    needs="Alias Maker needs GTK 4, VTE and PyGObject from your system. Install them with:
+  CachyOS / Arch:   sudo pacman -S vte4 python-gobject
+  Ubuntu / Debian:  sudo apt install gir1.2-vte-3.91 python3-gi
+  Fedora:           sudo dnf install vte291-gtk4 python3-gobject"
+    if [ "$prog" = aliasmaker-debug ] && [ ! -t 1 ] && [ $# -eq 0 ]; then
+        # Opened from the desktop with no window possible: still save the report.
+        saved=$(python3 "$app/aliasmaker-debug" --save-all 2>&1 | head -1)
+        say "$needs
+
+The debug window can't open without them, so the report was saved instead.
+$saved
+Send that file to the developer." "Alias Maker Debug"
+        exit 0
+    fi
+    if [ "$prog" = aliasmaker ]; then
+        say "$needs" "Alias Maker"
+        exit 1
+    fi
+fi
+
+exec python3 "$app/$prog" "$@"

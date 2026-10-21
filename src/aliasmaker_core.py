@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}
@@ -344,6 +344,15 @@ def doit_path():
     return Path(__file__).resolve().parent / "doit"
 
 
+def doit_command():
+    """How other terminals start doit. An AppImage's own folder vanishes when it closes,
+    so from an AppImage it's the AppImage file itself with 'doit' as its first word."""
+    appimage = os.environ.get("APPIMAGE")
+    if appimage and os.path.isfile(appimage):
+        return [appimage, "doit"]
+    return [str(doit_path())]
+
+
 def fish_quote(text):
     """Quote text for fish: single quotes, with backslashes and quotes escaped."""
     return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
@@ -425,7 +434,7 @@ def write_fish_shortcuts(custom=None):
             continue  # works with doit in front only
         description = fish_quote(f"Alias Maker: {entry['command']}")
         lines += [f"function {name} --description {description}",
-                  f"    {fish_quote(str(doit_path()))} --alias {fish_quote(name)} -- $argv",
+                  f"    {' '.join(fish_quote(part) for part in doit_command())} --alias {fish_quote(name)} -- $argv",
                   "end", ""]
         written.append(name)
     # Alias Maker windows reload this file when it changes, and use this list to remove
