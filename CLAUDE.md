@@ -2,7 +2,7 @@
 
 A beginner-friendly terminal app (GTK 4 + VTE window) plus the `doit` command, for CachyOS with fish. Python 3, no third-party packages beyond PyGObject/VTE.
 
-Current goal: get it working and usable on a real CachyOS PC. Prefer fixing and finishing what exists over adding features.
+Current goal: the author calls the project feature complete for now (1.1.0); it's in testing on a real Steam Deck. Fix what breaks and keep adding documentation links; don't add features unasked. Known rough edges: /clippy shows translated Arch Wiki pages for one-word searches, and very short searches match loosely.
 
 ## Layout
 - `src/aliasmaker_core.py`: the engine (custom commands, fish shortcut file, Database scan/search, /clippy, logging, settings). Both the window and `doit` use it.
