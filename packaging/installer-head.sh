@@ -33,6 +33,12 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     exit 0
 fi
 
+if grep -qsx 'ID=steamos' /etc/os-release; then
+    say "This is SteamOS, where the system files are locked, so this installer can't add Alias Maker."
+    say "Use the AppImage instead: it needs nothing installed. Download Alias-Maker-x86_64.AppImage from"
+    say "https://github.com/theStyleWithin/Alias-maker/releases/latest, make it runnable and double-click it."
+    exit 0
+fi
 [[ $EUID -ne 0 ]] || fail "Run this as yourself, not with sudo. It asks for your password when it needs it."
 command -v pacman >/dev/null 2>&1 || fail "This installer is for CachyOS and other Arch-based systems (it needs pacman)."
 command -v makepkg >/dev/null 2>&1 || fail "makepkg is missing. It comes with pacman: sudo pacman -S pacman"

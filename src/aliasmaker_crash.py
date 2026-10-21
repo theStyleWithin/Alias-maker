@@ -583,8 +583,12 @@ def health_check():
     for program, why, package in (("fastfetch", "PC info next to the DOIT logo", "fastfetch"),
                                   ("whatis", "descriptions in the Database", "man-db"),
                                   ("xdg-open", "opening /clippy results", "xdg-utils")):
-        add(OK if shutil.which(program) else WARN, program,
-            "installed" if shutil.which(program) else f"missing ({why}). Fix: sudo pacman -S {package}")
+        if shutil.which(program):
+            add(OK, program, "installed")
+        elif in_appimage:  # optional extras: the package names are Arch's, so don't send everyone to pacman
+            add(OK, program, f"not installed (optional: {why})")
+        else:
+            add(WARN, program, f"missing ({why}). Fix: sudo pacman -S {package}")
 
     here = Path(__file__).resolve().parent
     doit_ok = shutil.which("doit") or (here / "doit").exists()

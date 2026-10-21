@@ -90,17 +90,17 @@ To uninstall: `bash alias-maker-installer.run --uninstall`, or `sudo pacman -R a
 
 - **Ready-made package** for CachyOS / Arch: `sudo pacman -U ~/Downloads/alias-maker-<version>-1-any.pkg.tar.zst`
 - **AUR / Flathub:** not published by the author; if someone packages it there, it'll be under their name (see [Publishing](#publishing)).
-- **AppImage:** [Alias-Maker-x86_64.AppImage](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/Alias-Maker-x86_64.AppImage), nothing to install. It uses your PC's GTK 4 and VTE (CachyOS: `sudo pacman -S vte4 python-gobject`) and says what's missing if they aren't there. Make it runnable (right-click → Properties → Allow executing, or `chmod +x`), then double-click it. One-word commands you make in it keep working in other terminals as long as the AppImage file stays where it is.
-- **Alias Maker Debug as an AppImage:** [Alias-Maker-Debug-x86_64.AppImage](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/Alias-Maker-Debug-x86_64.AppImage), for testers whose Alias Maker won't start at all. Without GTK it still saves the report and says where.
+- **AppImage (recommended on SteamOS and anything that isn't CachyOS):** [Alias-Maker-x86_64.AppImage](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/Alias-Maker-x86_64.AppImage). Nothing to install, nothing to ask: it carries its own Python, GTK 4, VTE and fish, and opens straight to the terminal. Make it runnable (right-click → Properties → Allow executing, or `chmod +x`), then double-click it. It needs a 64-bit PC with a graphical desktop and a C library of glibc 2.38 or newer (that's any 2024 distro, such as Ubuntu 24.04, Fedora 39 and newer, and a current SteamOS). The window uses the AppImage's own fish when your login shell isn't fish (bash on SteamOS and Ubuntu), so the `Let'sdostuff~` prompt, `/clippy` and one-word commands work everywhere; set `ALIASMAKER_SHELL=/bin/bash` to use another shell. One-word commands you make in it keep working in other terminals as long as the AppImage file stays where it is.
+- **Alias Maker Debug as an AppImage:** [Alias-Maker-Debug-x86_64.AppImage](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/Alias-Maker-Debug-x86_64.AppImage), the same self-contained build, opening Alias Maker Debug (crash reports and the health check) instead of the terminal.
 
-**Antivirus warnings about the AppImage.** A few antivirus engines (for example on VirusTotal) flag AppImages in general: the small launcher inside every AppImage is a compressed, self-unpacking program, and that looks like a packed virus to them. Alias Maker's AppImage was checked file by file: it's AppImage's official, unmodified launcher plus Alias Maker's own Python and shell files from this repo, nothing else. It's a false positive. To check that a download is the genuine one, built by GitHub from this repo's public source (each release has a `SHA256SUMS` file and a signed build record):
+**Antivirus warnings about the AppImage.** A few antivirus engines (for example on VirusTotal) flag some AppImages: the small launcher at the front of every AppImage is a compressed, self-unpacking program, which looks like a packed virus to them, and this one also carries a lot of ready-made programs. Everything inside comes from known places: Ubuntu 24.04's own Python, GTK 4, VTE and their libraries (stripped, with their library search path changed so they find each other inside the AppImage), the official static build of fish 4.9.3 (checked against a pinned checksum when the AppImage is built), AppImage's official launcher, and Alias Maker's own files from this repo. To check that a download is the genuine one, built by GitHub from this repo's public source (each release has a `SHA256SUMS` file and a signed build record):
 
 ```
 sha256sum -c SHA256SUMS --ignore-missing
 gh attestation verify Alias-Maker-x86_64.AppImage --repo theStyleWithin/Alias-maker
 ```
 
-If you'd rather avoid AppImages, the installer and the pacman package hold plain scripts and files you can read.
+If you'd rather avoid AppImages, the installer and the pacman package hold plain scripts and files you can read (they use your own system's GTK, VTE and fish).
 
 **From the source (for working on Alias Maker itself):**
 
@@ -118,6 +118,17 @@ cd Alias-maker
 To publish a version, change `VERSION` in `src/aliasmaker_core.py` on `main`. The Release workflow (`.github/workflows/release.yml`) then runs the tests, builds every package and publishes a release with all of them: the installer (`packaging/build-installer.sh`), the AppImages (`packaging/build-appimage.sh`), and the pacman package and AUR files (`packaging/build-arch.sh`, run in an Arch container). The installer carries `packaging/arch/PKGBUILD` and the source, and runs `makepkg` on the user's PC.
 
 **AUR and Flathub: packagers wanted.** Alias Maker's author doesn't publish on the AUR or Flathub. Anyone is welcome to package it there under their own account. Every release carries hand-off kits, `alias-maker-aur-handoff.tar.gz` (ready to publish) and `alias-maker-flathub-handoff.tar.gz` (a manifest plus the code changes a Flatpak needs). See [packaging/handoff](packaging/handoff/README.md).
+
+## What Alias Maker runs on your PC
+
+Nothing is started that you don't see in a process list with its name on it, and nothing pops up on its own:
+
+- **Opening the window:** one `aliasmaker` process (Python), and your shell (the AppImage's own fish, or yours) inside it. The AppImage itself shows up once as `Alias-Maker-x86_64.AppImage`, its launcher.
+- **While you use it:** `doit` starts for a moment each time you use it. The Database scan (when you first open it, and again after software is installed or removed) runs read-only helpers one after another for a second or two (`whatis`, and `pacman` or `dpkg-query`). It never runs the programs it lists.
+- **Only if you ask:** `xdg-open` for a `/clippy` result, `man` for a manual page, and the commands you made.
+- **Never:** pop-up dialogs, background services, or anything left running after you close the window. No network use except `/clippy`'s lookups on the CachyOS and Arch wikis, and only when you type `/clippy`.
+
+On a Steam Deck in desktop mode, some programs that draw with Vulkan get a "Gamescope WSI Layer Error" pop-up (that's a separate zenity window made by Valve's Gamescope layer). Alias Maker avoids it by drawing with OpenGL instead of Vulkan (and switching Vulkan off for itself), and the shell inside the window never sees that setting.
 
 ## For testers: Alias Maker Debug
 
