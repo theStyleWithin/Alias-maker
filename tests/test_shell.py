@@ -165,5 +165,40 @@ class TestBashSetup(DoitTestCase):
         self.assertIn("EXPLAINED: --not-found nosuchcmd-xyz", out)
 
 
+@unittest.skipUnless(BASH, "bash isn't installed")
+class TestBashTypoHelper(DoitTestCase):
+    """The real doit, called by the real bash setup: a mistyped command offers close programs."""
+
+    def setUp(self):
+        super().setUp()
+        self.tools = self.home / "tools"
+        self.tools.mkdir()
+        (self.tools / "doit").symlink_to(ROOT / "src" / "doit")
+        make_program(self.tools, "zzprog-demo", 'echo "ZZ-RAN $*"')
+        doit.save_settings({"logging": False, "yes_words": ["y", "yes"]})
+        env = {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / "config"),
+               "XDG_DATA_HOME": str(self.home / "data"), "TERM": "xterm", "LANG": "C.UTF-8",
+               "PATH": f"{self.tools}:/usr/bin:/bin", "DOIT_EXAMPLES": os.environ["DOIT_EXAMPLES"],
+               "ALIASMAKER_OS_RELEASE": os.environ.get("ALIASMAKER_OS_RELEASE", "/etc/os-release")}
+        self.bash = Bash(env, self.home)
+        self.addCleanup(self.bash.close)
+        self.assertTrue(self.bash.wait_for("Let'sdostuff~"), self.bash.seen)
+
+    def test_a_typo_offers_the_real_program_and_a_number_runs_it(self):
+        out = self.bash.run("zzprog-dmo --hi", "1-")
+        self.assertIn("This looks like a typo. Did you mean:", out)
+        self.assertIn("1) zzprog-demo", out)
+        self.assertNotIn("ZZ-RAN", out, "nothing runs until a number is typed")
+        out = self.bash.run("1", "ZZ-RAN --hi")
+        self.assertIn("Running: zzprog-demo --hi", out)
+        self.assertIn("ZZ-RAN --hi", out)
+
+    def test_enter_skips_and_nothing_runs(self):
+        self.bash.run("zzprog-dmo", "1-")
+        out = self.bash.run("", "not running anything")
+        self.assertIn("not running anything", out)
+        self.assertNotIn("ZZ-RAN", out)
+
+
 if __name__ == "__main__":
     unittest.main()
