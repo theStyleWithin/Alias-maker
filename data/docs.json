@@ -1,0 +1,122 @@
+{
+  "_note": "Which documentation /clippy points at, by operating system (the ID or ID_LIKE in /etc/os-release). The first entry whose 'os' matches wins, so a specific system comes before the family it is built on. Source kinds: 'sitemap' (a wiki's pages, searched here), 'mediawiki' (a MediaWiki site's own search: 'api'), 'search' ('pattern' with {q} for the topic, optional 'home' page) and any source can carry a 'home' front page and 'link' ('url'). Add a system or a source here; no code change is needed.",
+  "systems": [
+    {
+      "os": [
+        "cachyos"
+      ],
+      "name": "CachyOS",
+      "sources": [
+        {
+          "id": "cachyos",
+          "name": "CachyOS wiki",
+          "kind": "sitemap",
+          "url": "https://wiki.cachyos.org",
+          "title_suffix": "CachyOS"
+        },
+        {
+          "id": "arch",
+          "name": "Arch Wiki",
+          "kind": "mediawiki",
+          "api": "https://wiki.archlinux.org/api.php",
+          "note": "CachyOS is built on Arch Linux"
+        }
+      ]
+    },
+    {
+      "os": [
+        "steamos"
+      ],
+      "name": "SteamOS",
+      "sources": [
+        {
+          "id": "steam-forums",
+          "name": "Steam Community forums",
+          "kind": "link",
+          "url": "https://steamcommunity.com/discussions/",
+          "note": "community answers, not official documentation",
+          "open_label": "Open the forums"
+        },
+        {
+          "id": "arch",
+          "name": "Arch Wiki",
+          "kind": "mediawiki",
+          "api": "https://wiki.archlinux.org/api.php",
+          "note": "SteamOS is built on Arch Linux"
+        }
+      ]
+    },
+    {
+      "os": [
+        "linuxmint"
+      ],
+      "name": "Linux Mint",
+      "sources": [
+        {
+          "id": "mint",
+          "name": "Linux Mint Installation Guide",
+          "kind": "search",
+          "pattern": "https://linuxmint-installation-guide.readthedocs.io/en/latest/search.html?q={q}",
+          "home": "https://linuxmint-installation-guide.readthedocs.io/en/latest/"
+        },
+        {
+          "id": "ubuntu",
+          "name": "Ubuntu documentation",
+          "kind": "link",
+          "url": "https://docs.ubuntu.com/",
+          "note": "Linux Mint is built on Ubuntu"
+        }
+      ]
+    },
+    {
+      "os": [
+        "ubuntu"
+      ],
+      "name": "Ubuntu",
+      "sources": [
+        {
+          "id": "ubuntu",
+          "name": "Ubuntu documentation",
+          "kind": "link",
+          "url": "https://docs.ubuntu.com/"
+        }
+      ]
+    },
+    {
+      "os": [
+        "manjaro"
+      ],
+      "name": "Manjaro",
+      "sources": [
+        {
+          "id": "manjaro",
+          "name": "Manjaro Wiki",
+          "kind": "mediawiki",
+          "api": "https://wiki.manjaro.org/api.php",
+          "home": "https://wiki.manjaro.org/index.php?title=Main_Page"
+        },
+        {
+          "id": "arch",
+          "name": "Arch Wiki",
+          "kind": "mediawiki",
+          "api": "https://wiki.archlinux.org/api.php",
+          "note": "Manjaro is built on Arch Linux"
+        }
+      ]
+    },
+    {
+      "os": [
+        "arch"
+      ],
+      "name": "Arch Linux",
+      "sources": [
+        {
+          "id": "arch",
+          "name": "Arch Wiki",
+          "kind": "mediawiki",
+          "api": "https://wiki.archlinux.org/api.php"
+        }
+      ]
+    }
+  ]
+}

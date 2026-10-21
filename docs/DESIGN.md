@@ -37,6 +37,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Installer: one `.run` file that builds and installs a pacman package (`packaging/`) | Built; the package layout, the installed copy and the installer's steps were tested, but pacman and makepkg themselves only run on a real Arch/CachyOS PC |
 | Release workflow: every new version publishes the installer, a pacman package, AppImages (app and Debug) and AUR/Flathub hand-off kits | Built; the installer and AppImages are built and tested on Ubuntu 24.04 (the AppImage window, a one-word command made in it working from a fresh fish after it closed, and both AppImages without GTK); the pacman package and .SRCINFO are only built by the workflow's Arch container |
 | Runs the PC's own shell (bash or fish, found by the scan); Let'sdostuff~ is only painted over it. Bash: prompt, title, `/clippy`, one-word commands, plain-words "not found"; the scan lists the shell's built-ins | Built; the bash setup runs in a real bash in the tests and the AppImage on a clean Ubuntu with a Steam Deck-style bashrc; works on a real Steam Deck (the author's first test of the standard AppImage); daily use still to come |
+| /clippy follows the detected OS: its own documentation per system (CachyOS, SteamOS via the Steam Community forums and the Arch Wiki, Linux Mint, Ubuntu, Manjaro, Arch), from `data/docs.json`; never another system's | Built; mechanism tested against stand-in servers; the live sites weren't reachable from the build sandbox. Debian, Fedora and Valve's own SteamOS pages wait for verified links |
 | Self-contained AppImages: Python, GTK 4, VTE and icons bundled; no dialogs, no installs, no stray settings in the shell | Built; run on a clean Ubuntu 24.04 chroot that has no Python, GTK or fish (window, prompt, icons, `doit`, Debug health check); works on a real Steam Deck (the author's first test of the standard AppImage); daily use still to come |
 | Graphics: OpenGL instead of Vulkan, so no Gamescope WSI pop-up on a Steam Deck | Built; the renderer choice and the clean shell environment are tested here, the pop-up itself can only be confirmed on a Steam Deck |
 | AUR hand-off kit (PKGBUILD, .SRCINFO, instructions) in every release | Built; the author won't publish it, a volunteer can |
@@ -125,11 +126,14 @@ Mockup: [welcome.png](mockups/welcome.png)
 
 Mockups: [clippy-typing.png](mockups/clippy-typing.png), [clippy.png](mockups/clippy.png)
 
-What it searches:
+What it searches depends on the operating system Alias Maker detects (`detect_os()`, from `/etc/os-release`). `data/docs.json` lists, per system, the documentation sources; the first entry whose `os` matches the ID or ID_LIKE wins, so CachyOS, SteamOS, Linux Mint, Ubuntu and Manjaro come before the Arch family. A system with no entry gets a plain "I don't have a documentation source for ... yet" and only the manual pages on this PC. `/clippy` never falls back to another system's documentation. Source kinds:
 
-1. **CachyOS wiki.** Alias Maker keeps a list of the wiki's English pages (title and one-line description) in `~/.local/share/alias-maker/cachyos-wiki.json`. It builds it from the wiki's sitemap (translated pages under `/bg/`, `/de/` and so on are skipped) and refreshes it when it's a week old. Matching uses titles, descriptions and page addresses, not the full page text.
-2. **Arch Wiki,** best effort, through its search API. The Arch Wiki is behind bot protection, which blocked lookups from the build sandbox, so this may come back empty; it fails quietly.
-3. **Manual pages on this PC,** from the Database (needs a scan with manual pages installed).
+1. **`sitemap`** (CachyOS wiki). Alias Maker keeps a list of the wiki's English pages (title and one-line description) in `~/.local/share/alias-maker/docs-<id>.json`. It builds it from the wiki's sitemap (translated pages under `/bg/`, `/de/` and so on are skipped) and refreshes it when it's a week old. Matching uses titles, descriptions and page addresses, not the full page text.
+2. **`mediawiki`** (Arch Wiki, Manjaro Wiki), best effort, through the site's own search API. If the site can't be reached (offline, or bot protection such as the Arch Wiki's) it says it seems to be offline rather than "found nothing".
+3. **`search`** (Linux Mint's guide on Read the Docs): a search address with the topic filled in, plus an optional front page. **`link`** (Ubuntu documentation): a fixed page. Any source can also carry a `home` front page so there's always something to open.
+4. **Manual pages on this PC,** from the Database (needs a scan with manual pages installed).
+
+Only addresses the author could verify or was given are in the list; the ones for other systems can be added without touching the code. The tests check the mechanism against stand-in servers; the live sites weren't reachable from the build sandbox.
 
 Words are matched forgivingly: endings are trimmed (chrooting → chroot, mounted → mount), the Database's synonyms apply (drives → disk, partition…), and filler words like "how do I" are ignored. Results are numbered; picking a web page opens it with `xdg-open`, picking a manual runs `man`. Offline, it says so and still shows saved wiki pages and manuals. It's not AI and never invents an answer.
 

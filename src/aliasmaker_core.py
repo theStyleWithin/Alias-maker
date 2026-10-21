@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}
@@ -969,8 +969,7 @@ def search_library(programs, query, limit=20):
 # ---------- /clippy: look things up instead of running them ----------
 
 HELPER_NAME = "clippy"  # the slash command: /clippy chrooting
-CACHYOS_WIKI = os.environ.get("ALIASMAKER_CACHYOS_WIKI", "https://wiki.cachyos.org").rstrip("/")
-ARCH_WIKI_API = os.environ.get("ALIASMAKER_ARCH_WIKI_API", "https://wiki.archlinux.org/api.php")
+DOCS_FILE_NAME = "docs.json"  # which documentation /clippy uses for each operating system
 WIKI_MAX_AGE_DAYS = 7
 USER_AGENT = f"AliasMaker/{VERSION} (+https://github.com/theStyleWithin/Alias-maker)"
 LANGUAGE_PREFIX = re.compile(r"^[a-z]{2}(-[a-z]{2,4})?$")  # /bg/, /de/, /zh/: translated pages
@@ -979,8 +978,33 @@ STOP_WORDS = {"how", "do", "i", "a", "an", "the", "to", "my", "is", "what", "can
               "use", "using", "make", "get", "into", "from", "this", "that"}
 
 
-def wiki_index_path():
-    return data_dir() / "cachyos-wiki.json"
+def find_docs_file():
+    """The list of documentation sources: env override, next to this script, then installed copies."""
+    candidates = []
+    if os.environ.get("ALIASMAKER_DOCS"):
+        candidates.append(Path(os.environ["ALIASMAKER_DOCS"]))
+    candidates.append(Path(__file__).resolve().parent.parent / "data" / DOCS_FILE_NAME)
+    candidates.append(data_dir() / DOCS_FILE_NAME)
+    candidates.append(Path("/usr/share/alias-maker") / DOCS_FILE_NAME)
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def docs_for_this_os(this_os=None):
+    """The documentation for the operating system this PC runs: {"name", "sources"}, or None.
+
+    The first entry in docs.json whose "os" matches wins, so a specific system (CachyOS, SteamOS,
+    Ubuntu) comes before the family it's built on (Arch, Debian)."""
+    this_os = this_os or detect_os()
+    path = find_docs_file()
+    data = read_json(path, {}) if path else {}
+    for system in data.get("systems", []):
+        if set(system.get("os", [])) & this_os["ids"]:
+            return system
+    return None
+
+
+def index_path(source):
+    return data_dir() / f"docs-{source['id']}.json"
 
 
 # Where Arch, Debian, Fedora and openSUSE keep their trusted certificates. A bundled Python
@@ -1018,8 +1042,9 @@ def title_from_url(url):
     return slug.replace("_", " ").replace("-", " ").capitalize()
 
 
-def page_details(url):
-    """Title and one-line description from a wiki page (falls back to its address)."""
+def page_details(url, suffix=""):
+    """Title and one-line description from a wiki page (falls back to its address).
+    suffix: the site's name that its page titles end with ("... | CachyOS"), to trim."""
     import html
     try:
         page = fetch_text(url)
@@ -1029,15 +1054,18 @@ def page_details(url):
     description = (re.search(r'<meta\s+name="description"\s+content="([^"]*)"', page, re.I)
                    or re.search(r'<meta\s+content="([^"]*)"\s+name="description"', page, re.I))
     title = html.unescape(title.group(1)).strip() if title else title_from_url(url)
-    title = re.sub(r"\s*\|\s*CachyOS\s*$", "", title)
+    if suffix:
+        title = re.sub(r"\s*\|\s*" + re.escape(suffix) + r"\s*$", "", title)
     return {"url": url, "title": title,
             "description": html.unescape(description.group(1)).strip() if description else ""}
 
 
-def refresh_wiki_index():
-    """Download the list of English CachyOS wiki pages with their titles. Raises OSError offline."""
+def refresh_index(source):
+    """Download the list of English pages of a wiki (from its sitemap) with their titles.
+    Raises OSError offline."""
     from concurrent.futures import ThreadPoolExecutor
-    root = fetch_text(f"{CACHYOS_WIKI}/sitemap-index.xml")
+    base = source["url"].rstrip("/")
+    root = fetch_text(f"{base}/sitemap-index.xml")
     urls = []
     if "<sitemapindex" in root:
         for sitemap in sitemap_urls(root):
@@ -1045,19 +1073,21 @@ def refresh_wiki_index():
     else:
         urls = sitemap_urls(root)
     urls = sorted({u for u in urls if english_page(u)})
+    suffix = source.get("title_suffix", "")
     with ThreadPoolExecutor(max_workers=8) as pool:
-        pages = list(pool.map(page_details, urls))
+        pages = list(pool.map(lambda url: page_details(url, suffix), urls))
     index = {"fetched_at": datetime.now().isoformat(timespec="seconds"),
-             "source": CACHYOS_WIKI, "pages": pages}
-    write_json(wiki_index_path(), index)
+             "source": base, "pages": pages}
+    write_json(index_path(source), index)
     return index
 
 
-def wiki_index(quiet=False):
-    """The saved wiki index, refreshed when it's a week old. Returns (index or None, online)."""
-    index = read_json(wiki_index_path(), None)
+def source_index(source, quiet=False):
+    """A wiki's saved page list, refreshed when it's a week old. Returns (index or None, online)."""
+    base = source["url"].rstrip("/")
+    index = read_json(index_path(source), None)
     fresh = False
-    if index and index.get("source") == CACHYOS_WIKI:
+    if index and index.get("source") == base:
         try:
             age = datetime.now() - datetime.fromisoformat(index["fetched_at"])
             fresh = age.days < WIKI_MAX_AGE_DAYS
@@ -1068,9 +1098,9 @@ def wiki_index(quiet=False):
     if fresh:
         return index, None  # None: didn't need to check the internet
     if not quiet:
-        print("Getting the CachyOS wiki's list of pages (only once a week, a few seconds)...")
+        print(f"Getting the {source['name']}'s list of pages (only once a week, a few seconds)...")
     try:
-        return refresh_wiki_index(), True
+        return refresh_index(source), True
     except (OSError, ValueError):
         return index, False
 
@@ -1106,20 +1136,24 @@ def search_wiki(pages, query, limit=5):
     return [item[2] for item in scored[:limit]]
 
 
-def search_arch_wiki(query, limit=3):
-    """Best effort: the Arch Wiki's own search. Returns [] if it can't be reached."""
+def search_mediawiki(api, query, limit=3):
+    """Best effort: a MediaWiki site's own search (the Arch Wiki's, for one). [] if it found nothing,
+    None if it couldn't be reached."""
     from urllib.parse import urlencode
     words = meaningful_words(query)
     if not words:
         return []
     stems = sorted(expand_word(words[0]) - {words[0]}, key=len)
     term = " ".join([stems[0] if stems and words[0].endswith(("ing", "ed")) else words[0]] + words[1:])
-    url = f"{ARCH_WIKI_API}?" + urlencode({"action": "opensearch", "search": term,
-                                             "limit": limit, "format": "json"})
+    url = f"{api}?" + urlencode({"action": "opensearch", "search": term,
+                                   "limit": limit, "format": "json"})
     try:
         data = json.loads(fetch_text(url, timeout=6))
+    except (OSError, ValueError):
+        return None  # couldn't reach it (offline, or blocked): not the same as finding nothing
+    try:
         return [{"title": t, "url": u, "description": ""} for t, u in zip(data[1], data[3])][:limit]
-    except (OSError, ValueError, IndexError, TypeError):
+    except (IndexError, TypeError):
         return []
 
 
@@ -1135,31 +1169,52 @@ def open_link(url):
 
 
 def clippy(state, query):
-    """/clippy <topic>: show helpful links about a topic. It never runs the command."""
+    """/clippy <topic>: show helpful links about a topic, from the documentation of the
+    operating system this PC runs. It never runs the command."""
+    from urllib.parse import quote_plus
     query = query.strip()
     if not query:
         print(f"Tell me what you want to know about, for example: /{HELPER_NAME} chrooting")
         return 1
     print(f"/{HELPER_NAME}: Here's what I found about \"{query}\". "
           "(I'm only looking it up, not running anything.)\n")
-    index, online = wiki_index()
-    choices = []
+    this_os = detect_os()
+    system = docs_for_this_os(this_os)
+    topic = " ".join(meaningful_words(query))
+    choices, offline, saved = [], False, False
 
-    wiki_pages = search_wiki(index["pages"], query) if index else []
-    if wiki_pages:
-        print("CachyOS wiki")
-        for page in wiki_pages:
+    if system is None:
+        print(f"I don't have a documentation source for {this_os['name']} yet, "
+              "so I'll only look on this PC.\n")
+    for source in (system or {}).get("sources", []):
+        kind = source.get("kind")
+        open_label = source.get("open_label", "Open the official page")
+        if kind == "sitemap":
+            index, online = source_index(source)
+            saved = saved or bool(index)
+            offline = offline or online is False
+            pages = search_wiki(index["pages"], query) if index else []
+        elif kind == "mediawiki":
+            found = [] if offline else search_mediawiki(source["api"], query)
+            if found is None:
+                offline = True
+            pages = found or []
+        elif kind == "search":
+            pages = [{"title": f'Search it for "{topic}"', "description": "",
+                      "url": source["pattern"].replace("{q}", quote_plus(topic))}]
+        elif kind == "link":
+            pages = [{"title": open_label, "description": "", "url": source["url"]}]
+        else:
+            pages = []
+        if source.get("home") and kind != "link":  # the front page too, so there's always something to open
+            pages.append({"title": open_label, "description": "", "url": source["home"]})
+        if not pages:
+            continue
+        print(source["name"] + (f" ({source['note']})" if source.get("note") else ""))
+        for page in pages:
             choices.append(("link", page["url"]))
             line = page["title"] + (f" - {page['description']}" if page["description"] else "")
             print(f"  {len(choices)}) {line}\n     {page['url']}")
-        print()
-
-    arch_pages = search_arch_wiki(query) if online is not False else []
-    if arch_pages:
-        print("Arch Wiki")
-        for page in arch_pages:
-            choices.append(("link", page["url"]))
-            print(f"  {len(choices)}) {page['title']}\n     {page['url']}")
         print()
 
     library = state.library()
@@ -1175,10 +1230,9 @@ def clippy(state, query):
                       f"   (manual: man {program['name']})")
             print()
 
-    if online is False:
-        note = ("You seem to be offline, so I can't refresh the wiki list or open web pages."
-                if index else "You seem to be offline, so I can't look anything up on the wiki.")
-        print(note)
+    if offline:
+        print("You seem to be offline, so I can't refresh the wiki list or open web pages."
+              if saved else "You seem to be offline, so I can't look anything up on the wiki.")
     if not choices:
         print(f"I didn't find anything about \"{query}\". Try a different word, "
               "or search the Database in the Alias Maker window (☰ → Database).")
@@ -1198,9 +1252,21 @@ def clippy(state, query):
     return 0 if open_link(target) else 1
 
 
+def man_install_hint():
+    """How to get manual pages on this PC, in the words of its own package manager."""
+    ids = detect_os()["ids"]
+    if "steamos" in ids:
+        return "SteamOS keeps its system files locked, so use the online documentation instead."
+    if package_tool() == "dpkg":
+        return "Install them with: sudo apt install man-db manpages"
+    if shutil.which("dnf"):
+        return "Install them with: sudo dnf install man-db man-pages"
+    return "Install them with: sudo pacman -S man-db man-pages"
+
+
 def read_manual_page(name):
     if not shutil.which("man"):
-        print("Manual pages aren't installed. Install them with: sudo pacman -S man-db man-pages")
+        print(f"Manual pages aren't installed. {man_install_hint()}")
         return 1
     return subprocess.run(["man", name]).returncode
 

@@ -35,6 +35,7 @@ package() {
     install -Dm644 src/shell/lets-do-stuff.bash "$lib/src/shell/lets-do-stuff.bash"
     install -Dm644 src/shell/doit-logo.txt "$lib/src/shell/doit-logo.txt"
     install -Dm644 data/examples.json "$lib/data/examples.json"
+    install -Dm644 data/docs.json "$lib/data/docs.json"
     python -m compileall -q -d "/usr/lib/$pkgname/src" "$lib/src/aliasmaker_core.py" "$lib/src/aliasmaker_crash.py"
 
     install -dm755 "$pkgdir/usr/bin"

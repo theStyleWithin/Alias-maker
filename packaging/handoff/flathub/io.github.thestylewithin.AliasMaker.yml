@@ -43,7 +43,7 @@ modules:
       - install -Dm755 -t /app/lib/alias-maker/src src/aliasmaker src/doit src/aliasmaker-debug
       - install -Dm644 -t /app/lib/alias-maker/src src/aliasmaker_core.py src/aliasmaker_crash.py
       - install -Dm644 -t /app/lib/alias-maker/src/shell src/shell/lets-do-stuff.fish src/shell/lets-do-stuff.bash src/shell/doit-logo.txt
-      - install -Dm644 -t /app/lib/alias-maker/data data/examples.json
+      - install -Dm644 -t /app/lib/alias-maker/data data/examples.json data/docs.json
       - install -dm755 /app/bin
       - ln -s ../lib/alias-maker/src/aliasmaker /app/bin/aliasmaker
       - ln -s ../lib/alias-maker/src/doit /app/bin/doit
