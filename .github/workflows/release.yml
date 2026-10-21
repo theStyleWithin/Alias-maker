@@ -126,7 +126,7 @@ jobs:
         run: |
           v="${{ needs.check.outputs.version }}"
           cat > body.md <<EOF
-          Alias Maker $v. An early version: please report anything that goes wrong.
+          **Alias Maker $v**: our first baby steps in creating a user-friendly, easy-to-use, customizable terminal for people who've never used one. It runs the shell your PC already uses and just paints \`Let'sdostuff~\` over it, keeps its own list of what your PC can run, and lets you make commands in your own words. Please report anything that goes wrong.
 
           **Pick one way to install:**
 
