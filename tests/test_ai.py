@@ -27,6 +27,7 @@ class FakeAI:
         self.status = 200
         self.reply = "Try the unzip command."
         self.garbage = False
+        self.model_items = None  # full model entries (with prices), if a test wants them
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -39,9 +40,10 @@ class FakeAI:
                     data = b"<html>not json"
                 elif outer.status != 200:
                     data = b'{"error": "nope"}'
-                elif self.path.startswith("/v1/models"):
-                    data = json.dumps({"data": [{"id": m} for m in outer.models]}).encode()
-                elif self.path == "/v1/messages":
+                elif self.path.split("?")[0].endswith("/models"):
+                    items = outer.model_items if outer.model_items is not None else [{"id": m} for m in outer.models]
+                    data = json.dumps({"data": items}).encode()
+                elif self.path.split("?")[0].endswith("/messages"):
                     data = json.dumps({"content": [{"type": "text", "text": outer.reply}]}).encode()
                 else:
                     data = json.dumps({"choices": [{"message": {"content": outer.reply}}]}).encode()
@@ -472,6 +474,283 @@ class TestChatIsNotTheTerminal(AITestCase):
         self.assertIn("never pretend it ran", text)
         self.assertIn("fenced code block", text)
         self.assertIn("after leaving this chat with /bye", text)
+
+
+class TestOtherServices(AITestCase):
+    """"Other service (OpenAI-style)": the person types a web address and a key."""
+
+    def custom(self, **extra):
+        config = {"provider": "custom", "key": "sk-whatever-123456", "enabled": True,
+                  "base_url": self.ai.base + "/v1", "model": "some-model", "notice_seen": True}
+        config.update(extra)
+        return config
+
+    def test_web_addresses_are_checked_and_tidied(self):
+        good = {
+            "https://api.tokenreply.com/v1": "https://api.tokenreply.com/v1",
+            "https://api.tokenreply.com/v1/": "https://api.tokenreply.com/v1",
+            " https://api.example.com ": "https://api.example.com",
+            "https://api.example.com/v1/chat/completions": "https://api.example.com/v1",
+            "https://api.example.com/v1/models": "https://api.example.com/v1",
+            "https://api.example.com:8443/openai/v1": "https://api.example.com:8443/openai/v1",
+            "http://127.0.0.1:8080/v1": "http://127.0.0.1:8080/v1",
+            "http://localhost:11434/v1": "http://localhost:11434/v1",
+        }
+        for typed, expect in good.items():
+            self.assertEqual(doit.ai_clean_base_url(typed), (expect, None), typed)
+        for bad in ("", "   ", "api.example.com/v1", "http://api.example.com/v1", "ftp://api.example.com",
+                    "javascript:alert(1)", "https://user:pass@api.example.com/v1", "https://api.example.com/v1?key=1",
+                    "https://api.example.com/v1#x", "https://", "https://api.example.com:notaport/v1",
+                    "https://" + "a" * 400 + ".com"):
+            address, problem = doit.ai_clean_base_url(bad)
+            self.assertIsNone(address, bad)
+            self.assertTrue(problem, bad)
+
+    def test_it_talks_in_grok_s_format_at_the_address_given(self):
+        config = self.custom()
+        models, chosen = doit.ai_check(config)
+        self.assertEqual(chosen, self.ai.models[0])
+        request = self.ai.requests[0]
+        self.assertEqual((request["method"], request["path"]), ("GET", "/v1/models"))
+        self.assertEqual(request["headers"]["authorization"], "Bearer sk-whatever-123456")
+        self.assertNotIn("x-api-key", request["headers"])
+        self.assertEqual(doit.ai_reply(config, [{"role": "user", "content": "hi"}]), "Try the unzip command.")
+        sent = self.ai.requests[1]
+        self.assertEqual(sent["path"], "/v1/chat/completions")
+        self.assertEqual(set(sent["body"]), {"model", "max_tokens", "messages"}, "no tools, no files")
+        self.assertEqual(sent["body"]["messages"][0]["role"], "system")
+
+    def test_an_address_without_v1_is_used_as_typed(self):
+        config = self.custom(base_url=self.ai.base)
+        doit.ai_models(config)
+        self.assertEqual(self.ai.requests[0]["path"], "/models")
+
+    def test_the_test_server_override_never_redirects_a_custom_address(self):
+        other = FakeAI()
+        self.addCleanup(other.stop)
+        os.environ["ALIASMAKER_AI_BASE"] = other.base
+        doit.ai_models(self.custom())
+        self.assertEqual(other.requests, [])
+        self.assertEqual(len(self.ai.requests), 1)
+
+    def test_a_bad_saved_address_is_refused_before_anything_is_sent(self):
+        for base in ("", "http://api.example.com/v1", "https://user:pw@api.example.com"):
+            with self.assertRaises(doit.AIError) as caught:
+                doit.ai_models(self.custom(base_url=base))
+            self.assertIn("web address", str(caught.exception))
+        self.assertEqual(self.ai.requests, [])
+        self.assertFalse(doit.ai_ready(self.custom(base_url="")))
+        self.assertTrue(doit.ai_ready(self.custom()))
+
+    def test_errors_name_the_service_by_its_address_and_never_show_the_key(self):
+        config = self.custom()
+        self.ai.status = 401
+        with self.assertRaises(doit.AIError) as caught:
+            doit.ai_models(config)
+        self.assertIn("127.0.0.1", str(caught.exception))
+        self.assertNotIn("sk-whatever", str(caught.exception))
+
+    def test_the_first_chat_warns_that_it_is_not_a_built_in_service(self):
+        doit.ai_save(self.custom(base_url="http://localhost:9/v1", notice_seen=False))
+        code, out, _ = self.run_doit(["ai"], answers=["no"])
+        self.assertIn("a service you chose yourself", out)
+        self.assertIn("only use a service you trust", out)
+        self.assertIn("localhost", out)
+        self.assertEqual(self.ai.requests, [])
+
+    def test_a_chat_works_and_the_banner_names_the_service(self):
+        doit.ai_save(self.custom())
+        _, out, _ = self.run_doit(["ai"], answers=["how do I unzip", "/bye"])
+        self.assertIn("AI CHAT with 127.0.0.1", out)
+        self.assertIn(doit.AI_BAR + "Try the unzip command.", out)
+
+    def test_typing_the_key_in_a_terminal_for_another_service(self):
+        with mock.patch.object(getpass, "getpass", return_value="sk-mystery-key-1"):
+            code, out, _ = self.run_doit(["ai", "setup"], answers=["other", self.ai.base + "/v1/"])
+        self.assertEqual(code, 0, out)
+        saved = doit.ai_load()
+        self.assertEqual((saved["provider"], saved["base_url"]), ("custom", self.ai.base + "/v1"))
+        self.assertEqual(saved["model"], self.ai.models[0])
+        _, out, _ = self.run_doit(["ai", "status"])
+        self.assertIn("127.0.0.1", out)
+        self.assertNotIn("sk-mystery", out)
+
+    def test_a_wrong_address_in_setup_saves_nothing(self):
+        with mock.patch.object(getpass, "getpass", return_value="sk-mystery-key-1"):
+            code, out, _ = self.run_doit(["ai", "setup"], answers=["other", "http://example.com/v1"])
+        self.assertEqual(code, 1)
+        self.assertIn("https://", out)
+        self.assertEqual(doit.ai_load(), {})
+        self.assertEqual(self.ai.requests, [])
+
+    def test_a_key_that_looks_like_neither_built_in_service_is_not_guessed(self):
+        self.assertIsNone(doit.ai_provider_for_key("sk-s78AoQ391Tc4IGNWrnFUMQ3vBV"))
+
+
+class TestSwapModel(AITestCase):
+    """/swapai: change the model from the service's own list, free ones first. Names must be exact."""
+
+    ITEMS = [{"id": "big-paid-model", "pricing": {"prompt": "0.000003", "completion": "0.000015"}},
+             {"id": "tiny-free-model", "pricing": {"prompt": "0", "completion": "0"}},
+             {"id": "llama-3-8b:free"},
+             {"id": "llama-3-70b"},
+             {"id": "no-price-info"}]
+
+    def setUp(self):
+        super().setUp()
+        self.ai.model_items = self.ITEMS
+        doit.ai_save({"provider": "custom", "key": "sk-whatever-123456", "enabled": True,
+                      "base_url": self.ai.base + "/v1", "model": "big-paid-model", "notice_seen": True})
+
+    def model(self):
+        return doit.ai_load()["model"]
+
+    def test_free_models_come_first_and_each_line_says_free_paid_or_price_not_listed(self):
+        _, out, prompts = self.run_doit(["/swapai"], answers=[""])
+        lines = [l.strip() for l in out.splitlines() if ") " in l]
+        self.assertEqual([l.split(") ")[1].split(" ")[0] for l in lines],
+                         ["tiny-free-model", "llama-3-8b:free", "big-paid-model", "llama-3-70b", "no-price-info"])
+        by_name = {l.split(") ")[1].split(" ")[0]: l for l in lines}
+        self.assertIn("free", by_name["tiny-free-model"])
+        self.assertNotIn("paid", by_name["tiny-free-model"])
+        self.assertIn("free", by_name["llama-3-8b:free"])
+        self.assertIn("paid: $3.00 in / $15.00 out per million tokens", by_name["big-paid-model"])
+        self.assertIn("(current)", by_name["big-paid-model"])
+        for name in ("llama-3-70b", "no-price-info"):
+            self.assertIn("price not listed (may cost)", by_name[name], "no price info is not a promise of free")
+            self.assertNotIn("free", by_name[name].replace("price not listed", ""))
+        self.assertIn("Models on 127.0.0.1:", out)
+        self.assertIn("Models the service lists as free come first.", out)
+        self.assertEqual(self.model(), "big-paid-model", "Enter keeps the current one")
+
+    def test_a_number_picks_a_model(self):
+        _, out, prompts = self.run_doit(["/swapai"], answers=["2"])
+        self.assertEqual(self.model(), "llama-3-8b:free")
+        self.assertIn("Now using llama-3-8b:free (free).", out)
+        self.assertTrue(prompts[0].startswith("Type a number or the exact model name"))
+        self.run_doit(["/swapai"], answers=["3"])
+        self.assertEqual(self.model(), "big-paid-model")
+        _, out, _ = self.run_doit(["/swapai", "llama-3-70b"])
+        self.assertIn("Now using llama-3-70b (price not listed (may cost)).", out)
+
+    def test_prices_are_read_carefully(self):
+        self.assertEqual(doit.ai_price_per_million("0.000003"), 3.0)
+        self.assertEqual(doit.ai_price_per_million("0"), 0)
+        for odd in ("", None, "free", "-1", "n/a"):
+            self.assertIsNone(doit.ai_price_per_million(odd), odd)
+        self.ai.model_items = [
+            {"id": "half", "pricing": {"prompt": "0", "completion": "0.000002"}},
+            {"id": "text-price", "pricing": {"prompt": "cheap", "completion": "cheap"}},
+            {"id": "only-one-side", "pricing": {"prompt": "0.000001"}},
+            {"id": "zero-both", "pricing": {"prompt": "0.0", "completion": "0.00"}}]
+        entries = {e["id"]: e for e in doit.ai_model_entries(doit.ai_load())}
+        self.assertFalse(entries["half"]["free"])
+        self.assertEqual(entries["half"]["price"], "$0.00 in / $2.00 out per million tokens")
+        self.assertEqual(doit.ai_cost_label(entries["text-price"]), "price not listed (may cost)")
+        self.assertEqual(doit.ai_cost_label(entries["only-one-side"]), "price not listed (may cost)")
+        self.assertEqual(doit.ai_cost_label(entries["zero-both"]), "free")
+
+    def test_the_exact_name_works_and_takes_the_services_own_spelling(self):
+        _, out, prompts = self.run_doit(["/swapai", "llama-3-70b"])
+        self.assertEqual(self.model(), "llama-3-70b")
+        self.assertEqual(prompts, [], "an exact name needs no questions")
+        self.run_doit(["swapai", "TINY-FREE-MODEL"])
+        self.assertEqual(self.model(), "tiny-free-model")
+
+    def test_a_name_that_is_not_in_the_list_is_never_applied(self):
+        _, out, _ = self.run_doit(["/swapai", "tiny-free-modle"], answers=[])
+        self.assertEqual(self.model(), "big-paid-model")
+        self.assertIn('no model called "tiny-free-modle"', out)
+        self.assertIn("nothing was changed", out)
+        self.assertIn("Close ones: tiny-free-model", out)
+        _, out, _ = self.run_doit(["/swapai"], answers=["99"])
+        self.assertIn("nothing was changed", out)
+        _, out, _ = self.run_doit(["/swapai"], answers=["made-up-name"])
+        self.assertEqual(self.model(), "big-paid-model")
+
+    def test_a_part_of_a_name_narrows_the_list_and_still_asks(self):
+        _, out, prompts = self.run_doit(["/swapai", "llama"], answers=[""])
+        self.assertIn("1) llama-3-8b:free", out)
+        self.assertIn("2) llama-3-70b", out)
+        self.assertNotIn("3)", out, "only the matches are listed")
+        self.assertEqual(self.model(), "big-paid-model", "a part of a name is never guessed into a choice")
+        self.run_doit(["/swapai", "70b"], answers=["1"])
+        self.assertEqual(self.model(), "llama-3-70b")
+
+    def test_a_long_list_is_cut_with_a_hint(self):
+        self.ai.model_items = [{"id": f"model-{n:03d}"} for n in range(60)]
+        _, out, _ = self.run_doit(["/swapai"], answers=[""])
+        self.assertIn(f"{doit.AI_LIST_LIMIT}) model-039", out)
+        self.assertNotIn("41) model-040", out)
+        self.assertIn("...and 20 more", out)
+        self.run_doit(["/swapai", "model-055"])
+        self.assertEqual(self.model(), "model-055", "an exact name beyond the first page works")
+
+    def test_without_a_terminal_it_only_lists_unless_given_a_name(self):
+        _, out, prompts = self.run_doit(["/swapai"], tty=False)
+        self.assertEqual(prompts, [])
+        self.assertIn("1) tiny-free-model", out)
+        self.assertEqual(self.model(), "big-paid-model")
+        self.run_doit(["/swapai", "llama-3-70b"], tty=False)
+        self.assertEqual(self.model(), "llama-3-70b")
+
+    def test_problems_are_explained_and_nothing_changes(self):
+        self.ai.status = 401
+        _, out, _ = self.run_doit(["/swapai"], answers=[])
+        self.assertIn("didn't accept that key", out)
+        self.assertEqual(self.model(), "big-paid-model")
+        self.ai.status = 200
+        self.ai.model_items = []
+        _, out, _ = self.run_doit(["/swapai"], answers=[])
+        self.assertIn("didn't list any models", out)
+
+    def test_no_key_says_where_to_start(self):
+        doit.ai_forget()
+        code, out, _ = self.run_doit(["/swapai"])
+        self.assertEqual(code, 1)
+        self.assertIn("no key yet", out)
+        self.assertEqual(self.ai.requests, [])
+
+    def test_it_also_works_as_doit_ai_model_and_slash_ai_model(self):
+        self.run_doit(["ai", "model", "llama-3-70b"])
+        self.assertEqual(self.model(), "llama-3-70b")
+        self.run_doit(["/ai", "model", "tiny-free-model"])
+        self.assertEqual(self.model(), "tiny-free-model")
+
+    def test_the_first_pick_on_another_service_is_a_free_model(self):
+        config = {"provider": "custom", "key": "sk-x", "base_url": self.ai.base + "/v1"}
+        entries, chosen = doit.ai_check_full(config)
+        self.assertEqual(chosen, "tiny-free-model")
+        self.assertEqual([e["id"] for e in entries][:2], ["tiny-free-model", "llama-3-8b:free"])
+        self.ai.model_items = [{"id": "only-paid", "pricing": {"prompt": "1", "completion": "1"}}]
+        self.assertEqual(doit.ai_check_full(config)[1], "only-paid")
+        _, chosen = doit.ai_check({**config, "model": "only-paid"})
+        self.assertEqual(chosen, "only-paid", "a model already chosen stays")
+
+    def test_built_in_services_keep_their_usual_default(self):
+        self.ai.model_items = None
+        _, chosen = doit.ai_check({"provider": "claude", "key": CLAUDE_KEY})
+        self.assertEqual(chosen, "claude-sonnet-5-5")
+
+    def test_swapai_is_one_of_alias_makers_own_words(self):
+        self.assertEqual(doit.phrase_problem("swapai", {})[0], "reserved")
+
+    def test_you_can_change_model_in_the_middle_of_a_chat(self):
+        doit.ai_save({**doit.ai_load(), "model": "big-paid-model"})
+        _, out, prompts = self.run_doit(
+            ["ai"], answers=["first question", "/swapai llama-3-70b", "second question", "/model tiny-free-model", "/bye"])
+        posts = [r["body"] for r in self.ai.requests if r["method"] == "POST"]
+        self.assertEqual([p["model"] for p in posts], ["big-paid-model", "llama-3-70b"])
+        self.assertEqual([m["content"] for m in posts[1]["messages"] if m["role"] == "user"],
+                         ["first question", "second question"], "the conversation is kept")
+        self.assertIn("Now using llama-3-70b (price not listed (may cost)).", out)
+        self.assertIn("Now using tiny-free-model (free).", out)
+        self.assertNotIn("That looks like a terminal command", out)
+        self.assertEqual(self.model(), "tiny-free-model")
+
+    def test_the_chat_banner_mentions_it(self):
+        _, out, _ = self.run_doit(["ai"], answers=["/bye"])
+        self.assertIn("Change the AI model any time with /swapai.", out)
 
 
 class TestSetupAndSettings(AITestCase):

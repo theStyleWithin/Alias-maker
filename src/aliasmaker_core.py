@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"], "clippy_web": None}
@@ -1462,12 +1462,17 @@ def read_manual_page(name):
 # anything. Nothing it says is run. The conversation lives in memory and is gone when the chat ends.
 
 AI_WORD = "ai"
+SWAP_WORD = "swapai"  # /swapai: change the AI model
 AI_FILE_NAME = "ai.json"
 AI_PROVIDERS = {
     "claude": {"name": "Claude", "company": "Anthropic", "base": "https://api.anthropic.com",
                "key_start": "sk-ant-", "key_page": "console.anthropic.com"},
     "grok": {"name": "Grok", "company": "xAI", "base": "https://api.x.ai",
              "key_start": "xai-", "key_page": "console.x.ai"},
+    # Any other service that speaks the same format as Grok and many others (OpenAI-style): the
+    # person gives its web address, e.g. https://api.example.com/v1
+    "custom": {"name": "AI service", "company": "that service", "base": None,
+               "key_start": None, "key_page": "the service's website"},
 }
 AI_QUIT_WORDS = {"/bye", "bye", "exit", "quit", "/exit", "/quit", "never mind", "goodbye"}
 AI_MAX_TURNS = 20
@@ -1511,13 +1516,50 @@ def ai_provider_for_key(key):
     """Which service a key belongs to, from how it starts (None if it isn't one we know)."""
     key = (key or "").strip()
     for name, info in AI_PROVIDERS.items():
-        if key.startswith(info["key_start"]):
+        if info["key_start"] and key.startswith(info["key_start"]):
             return name
     return None
 
 
+def ai_clean_base_url(text):
+    """A web address for an OpenAI-style service: (address, None), or (None, what's wrong).
+    It must be https (plain http only for this PC itself), with no password in it."""
+    from urllib.parse import urlsplit
+    text = (text or "").strip()
+    if not text:
+        return None, "Type the service's web address, for example https://api.example.com/v1"
+    try:
+        parts = urlsplit(text)
+        host = parts.hostname
+        parts.port  # noqa: B018  (raises if the port isn't a number)
+    except ValueError:
+        return None, "That doesn't look like a web address."
+    local = host in ("localhost", "127.0.0.1", "::1")
+    if parts.scheme != "https" and not (parts.scheme == "http" and local):
+        return None, "The address must start with https:// so your key travels safely."
+    if not host or parts.username or parts.password or parts.query or parts.fragment or len(text) > 300:
+        return None, "That doesn't look like a plain web address (no passwords or extras in it)."
+    path = parts.path.rstrip("/")
+    for tail in ("/chat/completions", "/models"):
+        if path.endswith(tail):
+            path = path[: -len(tail)]
+    return f"{parts.scheme}://{parts.netloc}{path}", None
+
+
+def ai_info(config):
+    """Names to show for the service in use: {"name", "company", "key_page"}."""
+    info = dict(AI_PROVIDERS.get(config.get("provider"), AI_PROVIDERS["custom"]))
+    if config.get("provider") == "custom":
+        from urllib.parse import urlsplit
+        host = urlsplit(config.get("base_url") or "").hostname or "that service"
+        info.update(name=host, company=host, key_page=host)
+    return info
+
+
 def ai_ready(config):
-    return bool(config.get("enabled") and config.get("key") and config.get("provider") in AI_PROVIDERS)
+    if not (config.get("enabled") and config.get("key") and config.get("provider") in AI_PROVIDERS):
+        return False
+    return config["provider"] != "custom" or ai_clean_base_url(config.get("base_url"))[0] is not None
 
 
 def ai_request(config, method, path, body=None, timeout=60):
@@ -1525,8 +1567,13 @@ def ai_request(config, method, path, body=None, timeout=60):
     the key never appears in an error."""
     import urllib.error
     import urllib.request
-    provider = AI_PROVIDERS[config["provider"]]
-    base = os.environ.get("ALIASMAKER_AI_BASE") or provider["base"]
+    provider = ai_info(config)
+    if config["provider"] == "custom":
+        base = config.get("base_url") or ""
+        if ai_clean_base_url(base)[0] is None:
+            raise AIError("The service's web address isn't set up right. Check it in ☰ → AI.")
+    else:
+        base = os.environ.get("ALIASMAKER_AI_BASE") or AI_PROVIDERS[config["provider"]]["base"]
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if config["provider"] == "claude":
         headers["x-api-key"] = config["key"]
@@ -1557,10 +1604,50 @@ def ai_request(config, method, path, body=None, timeout=60):
         raise AIError("The AI service sent something I couldn't read. Try again.") from None
 
 
+def ai_price_per_million(value):
+    """A price the service lists per token ("0.000003") as dollars per million tokens (3.0), or None."""
+    try:
+        number = float(str(value).strip())
+    except ValueError:
+        return None
+    return number * 1_000_000 if number >= 0 else None
+
+
+def ai_cost_label(entry):
+    """What to say about a model's cost, only as far as the service's own list says: free, paid with
+    its price, or that the price isn't listed."""
+    if entry.get("free"):
+        return "free"
+    if entry.get("price"):
+        return "paid: " + entry["price"]
+    return "price not listed (may cost)"
+
+
+def ai_model_entries(config):
+    """The models this key can use, as the service lists them: [{"id", "free", "price"}]. "free" is
+    only true when the service's list says so (a zero price, or an id ending in :free). "price" is
+    text like "$3.00 in / $15.00 out per million tokens" when the list gives non-zero prices."""
+    path = {"claude": "/v1/models?limit=100", "grok": "/v1/models", "custom": "/models"}[config["provider"]]
+    answer = ai_request(config, "GET", path, timeout=20)
+    entries = []
+    for model in answer.get("data", []):
+        if not (isinstance(model, dict) and model.get("id")):
+            continue
+        pricing = model.get("pricing") if isinstance(model.get("pricing"), dict) else {}
+        prompt = ai_price_per_million(pricing.get("prompt")) if "prompt" in pricing else None
+        completion = ai_price_per_million(pricing.get("completion")) if "completion" in pricing else None
+        free = prompt == 0 and completion == 0
+        price = None
+        if not free and prompt is not None and completion is not None:
+            price = f"${prompt:,.2f} in / ${completion:,.2f} out per million tokens"
+        entries.append({"id": str(model["id"]), "free": free or str(model["id"]).endswith(":free"),
+                        "price": price})
+    return entries
+
+
 def ai_models(config):
     """The models this key can use, as names (newest first as the service lists them)."""
-    answer = ai_request(config, "GET", "/v1/models?limit=100", timeout=20)
-    return [str(m["id"]) for m in answer.get("data", []) if isinstance(m, dict) and m.get("id")]
+    return [entry["id"] for entry in ai_model_entries(config)]
 
 
 def ai_default_model(provider, models):
@@ -1577,13 +1664,96 @@ def ai_default_model(provider, models):
     return models[0] if models else ""
 
 
-def ai_check(config):
-    """Test a key. Returns (models, chosen model). Raises AIError."""
-    models = ai_models(config)
-    if not models:
+def ai_free_first(entries):
+    """The service's models with the ones it lists as free first (otherwise in its own order)."""
+    return sorted(entries, key=lambda entry: not entry["free"])
+
+
+def ai_check_full(config):
+    """Test a key. Returns (models, chosen model): models are [{"id", "free"}], free ones first.
+    On another service the first pick is a free model if it lists any, so nothing costs by surprise.
+    Raises AIError."""
+    entries = ai_free_first(ai_model_entries(config))
+    if not entries:
         raise AIError("The key works, but no AI models are available to it.")
-    chosen = config.get("model") if config.get("model") in models else ai_default_model(config["provider"], models)
-    return models, chosen
+    ids = [entry["id"] for entry in entries]
+    free = [entry["id"] for entry in entries if entry["free"]]
+    if config.get("model") in ids:
+        chosen = config["model"]
+    else:
+        chosen = ai_default_model(config["provider"], free if (config["provider"] == "custom" and free) else ids)
+    return entries, chosen
+
+
+def ai_check(config):
+    """Test a key. Returns (model names, chosen model). Raises AIError."""
+    entries, chosen = ai_check_full(config)
+    return [entry["id"] for entry in entries], chosen
+
+
+AI_LIST_LIMIT = 40
+
+
+def ai_pick_model(config, wanted="", say=print):
+    """/swapai: change the model for the service in use. Model names must be exact, so this reads the
+    service's own list: a number or the exact name picks one, a part of a name narrows the list, and
+    nothing is applied that isn't in the list. Returns the new model name, or None if unchanged."""
+    try:
+        entries = ai_model_entries(config)
+    except AIError as error:
+        say(str(error))
+        return None
+    entries = ai_free_first(entries)
+    ids = [entry["id"] for entry in entries]
+    free = {entry["id"] for entry in entries if entry["free"]}
+    costs = {entry["id"]: ai_cost_label(entry) for entry in entries}
+    if not ids:
+        say("The service didn't list any models for this key.")
+        return None
+    wanted = wanted.strip()
+    chosen = None
+    shown = ids
+    if wanted:
+        exact = [i for i in ids if i == wanted] or [i for i in ids if i.lower() == wanted.lower()]
+        if exact:
+            chosen = exact[0]
+        else:
+            shown = [i for i in ids if wanted.lower() in i.lower()]
+            if not shown:
+                close = difflib.get_close_matches(wanted, ids, n=3, cutoff=0.5)
+                say(f'There\'s no model called "{wanted}" on {ai_info(config)["name"]}, so nothing was changed.')
+                if close:
+                    say("Close ones: " + ", ".join(close))
+                say("See the whole list with: /swapai")
+                return None
+    if chosen is None:
+        current = config.get("model")
+        if free & set(shown):
+            say("Models the service lists as free come first.")
+        say(f"Models on {ai_info(config)['name']}:")
+        width = max(len(model) for model in shown[:AI_LIST_LIMIT])
+        for number, model in enumerate(shown[:AI_LIST_LIMIT], 1):
+            say(f"  {number}) {model.ljust(width)}   {costs[model]}" + ("   (current)" if model == current else ""))
+        if len(shown) > AI_LIST_LIMIT:
+            say(f"  ...and {len(shown) - AI_LIST_LIMIT} more. Narrow it down with a part of the name: /swapai <part of a name>")
+        if not interactive():
+            return None
+        answer = (ask("Type a number or the exact model name (Enter keeps the current one): ") or "").strip()
+        if not answer:
+            say("Okay, keeping " + str(current))
+            return None
+        if answer.isdigit() and 1 <= int(answer) <= min(len(shown), AI_LIST_LIMIT):
+            chosen = shown[int(answer) - 1]
+        else:
+            exact = [i for i in ids if i == answer] or [i for i in ids if i.lower() == answer.lower()]
+            if not exact:
+                say("That isn't one of the models listed, so nothing was changed.")
+                return None
+            chosen = exact[0]
+    config["model"] = chosen
+    ai_save(config)
+    say(f"Now using {chosen} ({costs[chosen]}).")
+    return chosen
 
 
 def ai_system_prompt():
@@ -1625,7 +1795,7 @@ def ai_reply(config, history):
                             {"model": model, "max_tokens": 1024, "system": system, "messages": history})
         parts = [b.get("text", "") for b in answer.get("content", []) if isinstance(b, dict) and b.get("type") == "text"]
     else:
-        answer = ai_request(config, "POST", "/v1/chat/completions",
+        answer = ai_request(config, "POST", "/chat/completions" if config["provider"] == "custom" else "/v1/chat/completions",
                             {"model": model, "max_tokens": 1024,
                              "messages": [{"role": "system", "content": system}] + history})
         try:
@@ -1642,8 +1812,13 @@ def ai_first_notice(config):
     """Say once, plainly, what goes where. Returns False if they'd rather not."""
     if config.get("notice_seen"):
         return True
-    info = AI_PROVIDERS[config["provider"]]
-    print(f"This chats with {info['name']} ({info['company']}), using your own key.")
+    info = ai_info(config)
+    if config["provider"] == "custom":
+        print(f"This chats with {info['name']}, a service you chose yourself, using your own key.")
+        print(f"  - It isn't one of the built-in services: your key and what you type go to {info['name']},")
+        print("    so only use a service you trust.")
+    else:
+        print(f"This chats with {info['name']} ({info['company']}), using your own key.")
     print(f"  - What you type here is sent to {info['company']}, and nothing else is: no files, nothing")
     print("    from your screen or terminal. I also tell it which Linux you use so answers fit.")
     print("  - It can't run anything on your PC, and nothing it writes is run. If it suggests a")
@@ -1717,7 +1892,8 @@ def looks_like_command(text, state):
 def show_chat_banner(info, model):
     lines = [f"AI CHAT with {info['name']}  \u00b7  you are NOT at your terminal prompt",
              "Everything you type here is just a message. Nothing runs as a command,",
-             "and nothing the AI writes is ever run. Type /bye to go back to your terminal."]
+             "and nothing the AI writes is ever run. Type /bye to go back to your terminal.",
+             "Change the AI model any time with /swapai."]
     width = max(len(line) for line in lines) + 2
     print(paint("\u256d" + "\u2500" * width + "\u256e", "1;35"))
     for number, line in enumerate(lines):
@@ -1768,7 +1944,7 @@ def ai_chat(first_message=""):
     if not ai_first_notice(config):
         return 0
     state = State([], load_settings(), False)
-    info = AI_PROVIDERS[config["provider"]]
+    info = ai_info(config)
     set_window_title(f"AI chat with {info['name']}")
     show_chat_banner(info, config.get("model"))
     history = []
@@ -1786,6 +1962,12 @@ def ai_chat(first_message=""):
                     continue
             if normalize(text) in AI_QUIT_WORDS:
                 return 0
+            first = text.split(None, 1)
+            if first[0].lower() in ("/" + SWAP_WORD, "/model"):  # change model without leaving the chat
+                ai_pick_model(config, first[1] if len(first) > 1 else "")
+                print(f"(Chatting with {config.get('model')}. Your conversation so far is kept.)\n")
+                text = ""
+                continue
             if looks_like_command(text, state):
                 print(paint("That looks like a terminal command. Nothing runs in this chat.", "1;33"))
                 answer = ask(f"Want the AI to explain what it does? (type {yes_hint(state.settings)}; "
@@ -1837,12 +2019,18 @@ def ai_setup():
         return 0
     provider = ai_provider_for_key(key)
     if provider is None:
-        answer = normalize(ask("I don't recognise that key. Is it for claude or grok? ") or "")
-        provider = answer if answer in AI_PROVIDERS else None
+        answer = normalize(ask("I don't recognise that key. Is it for claude, grok, or another service (type other)? ") or "")
+        provider = answer if answer in AI_PROVIDERS else ("custom" if answer == "other" else None)
         if provider is None:
             print("Okay, nothing saved.")
             return 1
     config = {"provider": provider, "key": key, "enabled": True}
+    if provider == "custom":
+        base, problem = ai_clean_base_url(ask("Its web address (for example https://api.example.com/v1): "))
+        if problem:
+            print(problem)
+            return 1
+        config["base_url"] = base
     print("Checking the key...")
     try:
         models, config["model"] = ai_check(config)
@@ -1850,7 +2038,7 @@ def ai_setup():
         print(error)
         return 1
     ai_save(config)
-    print(f"Saved. Using {AI_PROVIDERS[provider]['name']}, model {config['model']}. Start chatting with: doit ai")
+    print(f"Saved. Using {ai_info(config)['name']}, model {config['model']}. Start chatting with: doit ai")
     return 0
 
 
@@ -1872,12 +2060,20 @@ def ai_command(state, arg):
         ai_save(config)
         print(f"The AI helper is now {word}.")
         return 0
+    if word.split()[:1] == ["model"]:
+        config = ai_load()
+        if not (config.get("key") and config.get("provider") in AI_PROVIDERS):
+            print("There's no key yet. Set one up first: ☰ → AI, or doit ai setup")
+            return 1
+        rest = arg.strip()[len("model"):].strip() if arg.strip().lower().startswith("model") else ""
+        ai_pick_model(config, rest)
+        return 0
     if word == "status":
         config = ai_load()
         if not config.get("key"):
             print("The AI helper isn't set up. (☰ → AI, or doit ai setup)")
         else:
-            info = AI_PROVIDERS.get(config.get("provider"), {"name": "unknown"})
+            info = ai_info(config)
             print(f"AI helper: {'on' if config.get('enabled') else 'off'}, {info['name']}, "
                   f"model {config.get('model') or 'not chosen'}. The key is saved on this PC, not shown.")
         return 0
@@ -2109,6 +2305,8 @@ def match_builtin(norm):
         return ("clippy", " ".join(words[1:]))
     if words[0] in (AI_WORD, "/" + AI_WORD):
         return ("ai", " ".join(words[1:]))
+    if words[0] in (SWAP_WORD, "/" + SWAP_WORD):
+        return ("ai", " ".join(["model"] + words[1:]))
     if words[0] in ("forget", "delete"):
         return ("forget", " ".join(words[1:]))
     if len(words) == 2 and words[0] == "logging" and words[1] in ("on", "off"):
@@ -2178,6 +2376,7 @@ def show_help(examples):
             ("doit forget <phrase>", "delete one of your commands (also: doit delete)"),
             ("/clippy <topic>", "look a topic up instead of running it (also: doit clippy)"),
             ("/ai or doit ai", "chat with an AI helper, if you set one up (☰ → AI)"),
+            ("/swapai", "change which AI model it uses (a list to pick from)"),
             ("doit show me what you did", "your command history, if the log is on"),
             ("doit logging on / off", "turn the command log on or off"),
             ("doit answer easy / strict", "say yes with y or yes, or only with yes"),
@@ -2531,7 +2730,8 @@ def handle(text, state):
     if builtin:
         if builtin[0] == "ai":  # the AI gets your words exactly as typed (capitals matter in file names)
             parts = text.split(None, 1)
-            builtin = ("ai", parts[1].strip() if len(parts) > 1 else "")
+            rest = parts[1].strip() if len(parts) > 1 else ""
+            builtin = ("ai", ("model " + rest).strip() if parts[0].lstrip("/").lower() == SWAP_WORD else rest)
         return run_builtin(*builtin, state)
     custom = state.custom_map.get(norm)
     if custom is None and re.search(r"[-_]", norm):  # check-my-drives: dashes typed for spaces

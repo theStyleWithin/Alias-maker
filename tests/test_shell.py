@@ -175,6 +175,10 @@ class TestBashSetup(DoitTestCase):
         self.assertIn("DOIT: ai how do I unzip", out)
         self.assertIn("DOIT: ai", self.bash.run("/ai", "DOIT: ai"))
 
+    def test_swapai_is_a_slash_command_too(self):
+        out = self.bash.run("/swapai some-model", "DOIT: swapai some-model")
+        self.assertIn("DOIT: swapai some-model", out)
+
     def test_your_one_word_commands_work_even_one_made_while_the_prompt_waited(self):
         out = self.bash.run("sayhi", "hello-shortcut")
         self.assertIn("Real command: echo hello-shortcut", out)

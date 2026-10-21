@@ -127,6 +127,7 @@ end
 # or Enter (a fish abbreviation), so it's never shown in red as an unknown command.
 abbr --add __aliasmaker_clippy --position command --regex '^/clippy$' -- 'doit clippy' 2>/dev/null
 abbr --add __aliasmaker_ai --position command --regex '^/ai$' -- 'doit ai' 2>/dev/null
+abbr --add __aliasmaker_swapai --position command --regex '^/swapai$' -- 'doit swapai' 2>/dev/null
 
 # Backup for older fish without that kind of abbreviation: fish doesn't know any command
 # starting with "/", so it calls fish_command_not_found. Catch /clippy there and hand
@@ -144,6 +145,10 @@ function fish_command_not_found
     end
     if test "$argv[1]" = /ai
         doit ai $argv[2..-1]
+        return
+    end
+    if test "$argv[1]" = /swapai
+        doit swapai $argv[2..-1]
         return
     end
     if __aliasmaker_reload_shortcuts; and functions -q -- $argv[1]

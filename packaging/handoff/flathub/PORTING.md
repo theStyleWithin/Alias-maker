@@ -25,7 +25,7 @@ Line numbers are for version @VERSION@.
    fish file must point at the host copy from step 2, not `/app/...`.
 
 4. **Running commands** (`run_entry()`, the `subprocess.run(..., shell=True)` around line
-   2322). This only runs on the host once steps 1–2 are done (doit then runs on the host).
+   2638). This only runs on the host once steps 1–2 are done (doit then runs on the host).
    Make sure no code path runs doit inside the sandbox.
 
 5. **The Database scan** (`scan_library()` around line 810, the PATH walk around line 685,
