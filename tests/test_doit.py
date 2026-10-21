@@ -670,23 +670,126 @@ class TestClippy(DoitTestCase):
         super().setUp()
         os.environ["no_proxy"] = os.environ["NO_PROXY"] = "127.0.0.1,localhost"
         self.wiki = FakeWiki(self.home / "wiki")
-        self.saved = (doit.CACHYOS_WIKI, doit.ARCH_WIKI_API)
-        doit.CACHYOS_WIKI = self.wiki.base
-        doit.ARCH_WIKI_API = f"{self.wiki.base}/api.php"
+        self.cachyos = {"id": "cachyos", "name": "CachyOS wiki", "kind": "sitemap",
+                        "url": self.wiki.base, "title_suffix": "CachyOS"}
+        arch = {"id": "arch", "name": "Arch Wiki", "kind": "mediawiki", "api": f"{self.wiki.base}/api.php"}
+        docs = {"systems": [
+            {"os": ["cachyos"], "name": "CachyOS", "sources": [self.cachyos, arch]},
+            {"os": ["steamos"], "name": "SteamOS", "sources": [dict(arch, note="SteamOS is built on Arch Linux")]},
+            {"os": ["linuxmint"], "name": "Linux Mint", "sources": [
+                {"id": "mint", "name": "Linux Mint guide", "kind": "search",
+                 "pattern": "https://docs.example.test/mint?q={q}", "home": "https://docs.example.test/mint/"}]},
+            {"os": ["ubuntu"], "name": "Ubuntu", "sources": [
+                {"id": "ubuntu", "name": "Ubuntu documentation", "kind": "link", "url": "https://docs.example.test/ubuntu/"}]},
+            {"os": ["manjaro"], "name": "Manjaro", "sources": [
+                {"id": "manjaro", "name": "Manjaro Wiki", "kind": "mediawiki", "api": f"{self.wiki.base}/api.php",
+                 "home": "https://docs.example.test/manjaro/"}, dict(arch, note="Manjaro is built on Arch Linux")]},
+            {"os": ["arch"], "name": "Arch Linux", "sources": [arch]}]}
+        (self.home / "docs.json").write_text(json.dumps(docs))
+        os.environ["ALIASMAKER_DOCS"] = str(self.home / "docs.json")
+        self.set_os("cachyos", "arch")
         self.opened = self.home / "opened.txt"
         opener = make_program(self.programs, "fake-opener", f'printf "%s" "$1" > "{self.opened}"')
         os.environ["ALIASMAKER_OPENER"] = str(opener)
         self.ran_chroot = self.home / "chroot-ran"
         make_program(self.programs, "chroot", f'touch "{self.ran_chroot}"')
 
+    def set_os(self, os_id, like=""):
+        path = self.home / "os-release"
+        path.write_text(f'ID={os_id}\nID_LIKE="{like}"\nPRETTY_NAME="{os_id} test system"\n')
+        os.environ["ALIASMAKER_OS_RELEASE"] = str(path)
+
     def tearDown(self):
-        doit.CACHYOS_WIKI, doit.ARCH_WIKI_API = self.saved
         os.environ.pop("ALIASMAKER_OPENER", None)
         self.wiki.stop()
         super().tearDown()
 
+    def test_on_ubuntu_it_points_at_ubuntus_documentation_not_cachyos(self):
+        self.set_os("ubuntu", "debian")
+        code, out, _ = self.run_doit(["clippy", "mounting", "drives"], tty=False)
+        self.assertEqual(code, 0)
+        self.assertIn("Ubuntu documentation", out)
+        self.assertIn("https://docs.example.test/ubuntu/", out)
+        self.assertNotIn("CachyOS", out)
+        self.assertNotIn("Arch Wiki", out)
+        self.assertFalse(doit.index_path(self.cachyos).exists(), "the CachyOS wiki was never asked")
+
+    def test_on_steamos_it_shows_the_arch_wiki_it_is_built_on_and_not_cachyos(self):
+        self.set_os("steamos", "arch")
+        _, out, _ = self.run_doit(["clippy", "chrooting"], tty=False)
+        self.assertIn("Arch Wiki (SteamOS is built on Arch Linux)", out)
+        self.assertIn("https://wiki.archlinux.org/title/Chroot", out)
+        self.assertNotIn("CachyOS", out)
+
+    def test_steamos_offline_says_it_could_not_reach_the_wiki_instead_of_finding_nothing(self):
+        self.set_os("steamos", "arch")
+        self.wiki.stop()
+        code, out, _ = self.run_doit(["clippy", "chrooting"], tty=False)
+        self.assertEqual(code, 1)
+        self.assertIn("seem to be offline", out)
+        self.wiki = FakeWiki(self.home / "wiki2")
+
+    def test_linux_mint_gets_its_own_guide_with_a_search_and_the_first_match_wins(self):
+        self.set_os("linuxmint", "ubuntu debian")
+        _, out, _ = self.run_doit(["clippy", "mounting", "drives"], tty=False)
+        self.assertIn('Search it for "mounting drives"', out)
+        self.assertIn("https://docs.example.test/mint?q=mounting+drives", out)
+        self.assertIn("https://docs.example.test/mint/", out)
+        self.assertNotIn("Ubuntu documentation", out, "Mint's own entry wins over Ubuntu's")
+
+    def test_a_specific_system_wins_over_the_family_it_is_built_on(self):
+        self.set_os("cachyos", "arch")
+        _, out, _ = self.run_doit(["clippy", "gaming"], tty=False)
+        self.assertIn("CachyOS wiki", out)
+        self.set_os("endeavouros", "arch")  # no entry of its own: its family's
+        _, out, _ = self.run_doit(["clippy", "chrooting"], tty=False)
+        self.assertIn("Arch Wiki", out)
+        self.assertNotIn("CachyOS wiki", out)
+
+    def test_manjaro_gets_its_wiki_searched_and_its_front_page(self):
+        self.set_os("manjaro", "arch")
+        _, out, _ = self.run_doit(["clippy", "chrooting"], tty=False)
+        self.assertIn("Manjaro Wiki", out)
+        self.assertIn("https://docs.example.test/manjaro/", out)
+        self.assertIn("Arch Wiki (Manjaro is built on Arch Linux)", out)
+        self.assertNotIn("CachyOS", out)
+        self.wiki.stop()  # offline: the front page is still there to open
+        _, out, _ = self.run_doit(["clippy", "chrooting"], tty=False)
+        self.assertIn("https://docs.example.test/manjaro/", out)
+        self.wiki = FakeWiki(self.home / "wiki2")
+
+    def test_an_unknown_system_says_so_and_asks_no_wiki(self):
+        self.set_os("plan9")
+        code, out, _ = self.run_doit(["clippy", "chrooting"], tty=False)
+        self.assertEqual(code, 1)
+        self.assertIn("I don't have a documentation source for plan9 test system yet", out)
+        self.assertFalse(doit.index_path(self.cachyos).exists())
+
+    def test_the_shipped_list_covers_the_systems_it_promises(self):
+        shipped = json.loads((ROOT / "data" / "docs.json").read_text())
+        by_os = {system["os"][0]: system for system in shipped["systems"]}
+        self.assertEqual(list(by_os)[:2], ["cachyos", "steamos"], "specific systems come first")
+        for system in shipped["systems"]:
+            for source in system["sources"]:
+                self.assertIn(source["kind"], ("sitemap", "mediawiki", "search", "link"))
+                needed = {"sitemap": "url", "mediawiki": "api", "search": "pattern", "link": "url"}[source["kind"]]
+                self.assertTrue(source.get(needed), f"{source['id']} needs {needed}")
+                if source["kind"] == "search":
+                    self.assertIn("{q}", source["pattern"])
+        self.assertIn("linuxmint", by_os)
+        self.assertIn("manjaro", by_os)
+        self.assertEqual(by_os["manjaro"]["sources"][0]["home"], "https://wiki.manjaro.org/index.php?title=Main_Page")
+        self.assertNotIn("cachyos", json.dumps(by_os["ubuntu"]).lower())
+
+    def test_manual_page_hints_use_the_package_manager_this_pc_has(self):
+        self.set_os("ubuntu", "debian")
+        with mock.patch.object(doit, "package_tool", return_value="dpkg"):
+            self.assertIn("sudo apt install man-db manpages", doit.man_install_hint())
+        self.set_os("steamos", "arch")
+        self.assertIn("locked", doit.man_install_hint())
+
     def test_index_keeps_english_pages_with_titles(self):
-        index = doit.refresh_wiki_index()
+        index = doit.refresh_index(self.cachyos)
         titles = sorted(p["title"] for p in index["pages"])
         self.assertEqual(titles, ["Automount with fstab", "CachyOS Wiki", "CachyOS chroot Helper",
                                   "Gaming with CachyOS"])
@@ -735,17 +838,17 @@ class TestClippy(DoitTestCase):
         self.assertIn("Getting the CachyOS wiki's list", out)
         _, out, _ = self.run_doit(["clippy", "gaming"], tty=False)
         self.assertNotIn("Getting the CachyOS wiki's list", out)
-        index = json.loads(doit.wiki_index_path().read_text())
+        index = json.loads(doit.index_path(self.cachyos).read_text())
         index["fetched_at"] = (datetime.now() - timedelta(days=8)).isoformat(timespec="seconds")
-        doit.wiki_index_path().write_text(json.dumps(index))
+        doit.index_path(self.cachyos).write_text(json.dumps(index))
         _, out, _ = self.run_doit(["clippy", "gaming"], tty=False)
         self.assertIn("Getting the CachyOS wiki's list", out)
 
     def test_offline_with_a_saved_list_still_shows_links(self):
         self.run_doit(["clippy", "gaming"], tty=False)
-        index = json.loads(doit.wiki_index_path().read_text())
+        index = json.loads(doit.index_path(self.cachyos).read_text())
         index["fetched_at"] = (datetime.now() - timedelta(days=8)).isoformat(timespec="seconds")
-        doit.wiki_index_path().write_text(json.dumps(index))
+        doit.index_path(self.cachyos).write_text(json.dumps(index))
         self.wiki.stop()
         code, out, _ = self.run_doit(["clippy", "gaming"], tty=False)
         self.assertEqual(code, 0)
