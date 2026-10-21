@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"], "clippy_web": None}
@@ -2804,6 +2804,7 @@ def typo_suggestions(state, name, limit=3):
         phrase = normalize(custom["phrase"])
         if phrase and " " not in phrase:
             found.setdefault(phrase, "custom")
+    common = set(COMMON_COMMANDS) | {tool for _, tool in MANAGER_FAMILIES if shutil.which(tool)}
     ranked = []
     for candidate, kind in found.items():
         if candidate == name:
@@ -2812,7 +2813,7 @@ def typo_suggestions(state, name, limit=3):
         if distance > allowed:
             continue
         swapped = distance == 1 and sorted(low) == sorted(candidate.lower())
-        ranked.append(((distance, not swapped, kind != "custom", candidate not in COMMON_COMMANDS,
+        ranked.append(((distance, not swapped, kind != "custom", candidate not in common,
                         candidate not in described, abs(len(candidate) - len(low)), candidate), candidate, kind))
     ranked.sort()
     return [(candidate, kind) for _, candidate, kind in ranked[:limit]]
@@ -2858,6 +2859,143 @@ def offer_typo_fix(state, words, suggestions):
     return True
 
 
+# --- commands from another Linux: this PC's version of them ---
+
+FOREIGN_MANAGERS = ("apt", "apt-get", "aptitude", "pacman", "dnf", "yum", "zypper")
+MANAGER_FAMILIES = (("arch", "pacman"), ("debian", "apt"), ("fedora", "dnf"), ("rhel", "dnf"),
+                    ("suse", "zypper"), ("opensuse", "zypper"))
+MANAGER_OWNERS = {"apt": "Debian and Ubuntu", "apt-get": "Debian and Ubuntu", "aptitude": "Debian and Ubuntu",
+                  "pacman": "Arch Linux and the systems built on it", "dnf": "Fedora", "yum": "Fedora and Red Hat",
+                  "zypper": "openSUSE"}
+# Old command names that newer systems dropped, and what replaces them.
+OLD_COMMANDS = {"ifconfig": (["ip", "addr"], "shows your network addresses (ifconfig is the old way)"),
+                "netstat": (["ss", "-tulpn"], "shows what is listening on the network (netstat is the old way)")}
+
+
+def my_package_manager():
+    """The package manager this PC's system uses (apt, pacman, dnf or zypper), if it's installed."""
+    ids = detect_os()["ids"]
+    for family, tool in MANAGER_FAMILIES:
+        if family in ids and shutil.which(tool):
+            return tool
+    return None
+
+
+def parse_package_command(words):
+    """What a package manager command from another Linux was asking for: (manager, action, packages).
+    action is install, remove, search or upgrade (None if unclear). Only plain words are kept."""
+    name = words[0].lower()
+    rest = [w for w in words[1:]]
+    flags = [w for w in rest if w.startswith("-")]
+    plain = [w for w in rest if not w.startswith("-") and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+:@/-]*", w)]
+    action, packages = None, []
+    if name == "pacman":
+        letters = "".join(f.lstrip("-") for f in flags if not f.startswith("--"))
+        if "S" in letters and "y" in letters and "u" in letters:
+            action = "upgrade"
+        elif "S" in letters and "s" in letters:
+            action, packages = "search", plain
+        elif "S" in letters:
+            action, packages = "install", plain
+        elif "R" in letters:
+            action, packages = "remove", plain
+    else:
+        verbs = {"install": "install", "in": "install", "remove": "remove", "rm": "remove", "erase": "remove",
+                 "purge": "remove", "uninstall": "remove", "search": "search", "se": "search",
+                 "update": "upgrade", "upgrade": "upgrade", "full-upgrade": "upgrade", "dist-upgrade": "upgrade",
+                 "dup": "upgrade", "up": "upgrade"}
+        if plain and plain[0].lower() in verbs:
+            action, packages = verbs[plain[0].lower()], plain[1:]
+    if action in ("install", "remove", "search") and not packages:
+        action = None
+    return name, action, packages
+
+
+def os_translation(state, words):
+    """If the missing command belongs to another Linux (apt on Arch, pacman on Ubuntu, ifconfig on a
+    system without it...), what this PC does instead: None, or {"headline", "options"} where options
+    are (label, command words, needs a yes first)."""
+    this_os = detect_os()
+    typed = words[0].lower()
+    old = OLD_COMMANDS.get(typed)
+    if old and shutil.which(old[0][0]):
+        return {"headline": f'"{typed}" isn\'t on this PC any more. {" ".join(old[0])} {old[1]}:',
+                "options": [(" ".join(old[0]), list(old[0]), False)]}
+    manager = typed if typed in FOREIGN_MANAGERS else next(
+        (m for m in FOREIGN_MANAGERS if len(typed) > 3 and typo_distance(typed, m) <= 1), None)
+    if manager is None or shutil.which(manager):
+        return None  # not a package manager, or one this PC really has (a plain typo: handled elsewhere)
+    mine = my_package_manager()
+    owners = MANAGER_OWNERS[manager]
+    _, action, packages = parse_package_command([manager] + words[1:])
+    options = []
+    if "steamos" in this_os["ids"]:
+        headline = (f'"{typed}" is for {owners}, not SteamOS. SteamOS keeps its system files locked, so add '
+                    "apps with Discover (in desktop mode) or Flatpak instead.")
+        if shutil.which("flatpak"):
+            if action in ("install", "search"):
+                options.append((f"flatpak search {' '.join(packages)}", ["flatpak", "search"] + packages, False))
+            elif action == "upgrade":
+                options.append(("flatpak update", ["flatpak", "update"], True))
+    elif mine:
+        headline = (f'"{typed}" is for {owners}. This PC runs {this_os["name"]}, which uses {mine}'
+                    + (". The same thing here:" if action else "."))
+        if action == "install":
+            command = {"apt": ["sudo", "apt", "install"], "pacman": ["sudo", "pacman", "-S"],
+                       "dnf": ["sudo", "dnf", "install"], "zypper": ["sudo", "zypper", "install"]}[mine] + packages
+            options.append((" ".join(command), command, True))
+        elif action == "remove":
+            command = {"apt": ["sudo", "apt", "remove"], "pacman": ["sudo", "pacman", "-R"],
+                       "dnf": ["sudo", "dnf", "remove"], "zypper": ["sudo", "zypper", "remove"]}[mine] + packages
+            options.append((" ".join(command), command, True))
+        elif action == "search":
+            command = {"apt": ["apt", "search"], "pacman": ["pacman", "-Ss"],
+                       "dnf": ["dnf", "search"], "zypper": ["zypper", "search"]}[mine] + packages
+            options.append((" ".join(command), command, False))
+        elif action == "upgrade":
+            better = other_way_for_this_pc("update my system")
+            if better:
+                options.append((better["command"], ["sh", "-c", better["command"]], True))
+    else:
+        return None
+    return {"headline": headline, "options": options}
+
+
+def offer_translation(state, words, translation):
+    """Show this PC's version of a command from another Linux. Nothing runs unless its number is
+    typed; anything that changes software asks for a yes as well. Always handled."""
+    print(translation["headline"])
+    options = translation["options"]
+    for number, (label, _, _) in enumerate(options, 1):
+        print(f"  {number}) {label}")
+    if not options:
+        return
+    if not interactive():
+        return
+    top = len(options)
+    answer = (ask(f"Type {'1' if top == 1 else '1-' + str(top)} to run it, or press Enter to skip: ") or "").strip()
+    if not answer.isdigit() or not 1 <= int(answer) <= top:
+        print("Okay, not running anything.")
+        return
+    label, command, confirm = options[int(answer) - 1]
+    print(f"Running: {label}")
+    if state.dry_run:
+        print(f"[dry run] Would run: {label}")
+        return
+    if confirm and not is_yes(ask(f"This one changes software on your PC. Go ahead? (type {yes_hint(state.settings)}) "),
+                              state.settings):
+        print("Okay, not running anything.")
+        return
+    try:
+        code = subprocess.run(command).returncode
+    except KeyboardInterrupt:
+        code = 130
+    except OSError as error:
+        print(f"That didn't start: {error.strerror or error}")
+        code = 126
+    write_log(state.settings, f"other-system command: {words[0]}", label, code)
+
+
 def explain_not_found(state, words):
     """The shell couldn't find a command: say why in plain words.
     Returns 0 if it was one of the user's own phrases typed without doit, 1 otherwise."""
@@ -2868,6 +3006,10 @@ def explain_not_found(state, words):
         print(f'"{typed}" is one of your own commands. Put doit in front of it: doit {typed}')
         return 0
     name = words[0]
+    translation = os_translation(state, words)
+    if translation:  # a command from another Linux: say what this PC does instead
+        offer_translation(state, words, translation)
+        return 0 if interactive() else 1
     suggestions = typo_suggestions(state, name)
     if suggestions and offer_typo_fix(state, words, suggestions):
         return 0  # handled: a suggestion was shown and answered
