@@ -428,7 +428,117 @@ class TestScan(ScanTestCase):
         code, out, _ = self.run_doit(["--not-found", "lsblkk"], tty=False)
         self.assertEqual(code, 1)
         self.assertIn('"lsblkk" isn\'t a program on this PC', out)
-        self.assertIn("similar name: lsblk", out)
+        self.assertIn("This looks like a typo. Did you mean:", out)
+        self.assertIn("1) lsblk", out)
+
+
+class TestTypoHelper(DoitTestCase):
+    """A mistyped command is never run: it offers up to three close programs, and runs one only if
+    the person types its number."""
+
+    def setUp(self):
+        super().setUp()
+        self.ran = self.home / "ran.txt"
+        for name in ("ls", "lsof", "lsusb", "cat", "cp", "rm"):
+            make_program(self.programs, name, f'echo "{name} $*" >> "{self.ran}"')
+        make_program(self.programs, "lsblk", f'echo "lsblk $*" >> "{self.ran}"')
+        (self.programs / "lsb-notes.txt").write_text("not a program")
+        self.state = doit.State([], doit.load_settings(), False)
+
+    def names(self, typed):
+        return [name for name, _ in doit.typo_suggestions(self.state, typed)]
+
+    def ran_lines(self):
+        return self.ran.read_text().splitlines() if self.ran.exists() else []
+
+    def test_distance_counts_one_slip_as_one(self):
+        self.assertEqual(doit.typo_distance("lsbk", "lsblk"), 1)    # missing letter
+        self.assertEqual(doit.typo_distance("lsblkk", "lsblk"), 1)  # extra letter
+        self.assertEqual(doit.typo_distance("sl", "ls"), 1)         # two swapped
+        self.assertEqual(doit.typo_distance("lsblx", "lsblk"), 1)   # wrong letter
+        self.assertEqual(doit.typo_distance("cat", "cat"), 0)
+
+    def test_close_programs_come_first(self):
+        self.assertEqual(self.names("lsbk")[0], "lsblk")
+        self.assertEqual(self.names("sl")[0], "ls")
+        self.assertEqual(self.names("LS"), ["ls"])
+        self.assertEqual(self.names("lsblkk"), ["lsblk"])
+
+    def test_at_most_three_and_not_the_word_itself(self):
+        found = self.names("lso")
+        self.assertLessEqual(len(found), 3)
+        self.assertNotIn("lso", found)
+        self.assertEqual(self.names("lsof"), self.names("lsof"))
+        self.assertNotIn("lsof", self.names("lsof"))
+
+    def test_nothing_close_means_no_suggestions(self):
+        self.assertEqual(self.names("xyzzyplugh"), [])
+        self.assertEqual(self.names("l"), [])
+        self.assertEqual(self.names("./lsbk"), [])
+        self.assertNotIn("lsb-notes.txt", self.names("lsb-notes.tx"))  # not a program
+
+    def test_a_one_word_command_you_made_counts(self):
+        doit.save_custom_command("chk", "true", False)
+        state = doit.State([], doit.load_settings(), False)
+        self.assertEqual(doit.typo_suggestions(state, "chkk"), [("chk", "custom")])
+
+    def test_choosing_a_number_runs_it_with_the_same_words(self):
+        code, out, prompts = self.run_doit(["--not-found", "lsbk", "-f", "my file"], answers=["1"])
+        self.assertEqual(code, 0)
+        self.assertIn("This looks like a typo. Did you mean:", out)
+        self.assertIn("1) lsblk", out)
+        self.assertIn("Running: lsblk -f 'my file'", out)
+        self.assertTrue(prompts[0].startswith("Type 1"))
+        self.assertEqual(self.ran_lines(), ["lsblk -f my file"])
+
+    def test_enter_or_a_wrong_answer_runs_nothing(self):
+        for answer in ("", "n", "9", "0", "lsblk"):
+            code, out, _ = self.run_doit(["--not-found", "lsbk"], answers=[answer])
+            self.assertEqual(code, 0)
+            self.assertIn("not running anything", out)
+        code, out, _ = self.run_doit(["--not-found", "lsbk"], answers=[])  # Ctrl-D
+        self.assertEqual(self.ran_lines(), [])
+
+    def test_nothing_is_asked_when_nobody_is_there(self):
+        code, out, prompts = self.run_doit(["--not-found", "lsbk"], tty=False)
+        self.assertEqual(code, 1)
+        self.assertEqual(prompts, [])
+        self.assertIn("1) lsblk", out)
+        self.assertEqual(self.ran_lines(), [])
+
+    def test_risky_programs_ask_again(self):
+        code, out, prompts = self.run_doit(["--not-found", "rn", "-rf", "old"], answers=["1", "no"])
+        self.assertIn("1) rm", out)
+        self.assertTrue(prompts[1].startswith("This one can change or remove things"))
+        self.assertEqual(self.ran_lines(), [])
+        self.run_doit(["--not-found", "rn", "old"], answers=["1", "yes"])
+        self.assertEqual(self.ran_lines(), ["rm old"])
+
+    def test_dry_run_shows_but_does_not_run(self):
+        code, out, _ = self.run_doit(["--dry-run", "--not-found", "lsbk"], answers=["1"])
+        self.assertIn("[dry run] Would run: lsblk", out)
+        self.assertEqual(self.ran_lines(), [])
+
+    def test_picking_a_command_you_made_goes_through_doit(self):
+        ran = self.home / "mine-ran"
+        doit.save_custom_command("chk", f'echo hi > "{ran}"', False)
+        code, out, _ = self.run_doit(["--not-found", "chkk"], answers=["1", "no"])
+        self.assertIn("(a command you made)", out)
+        self.assertTrue(ran.exists())
+
+    def test_picks_are_logged_only_if_logging_is_on(self):
+        self.run_doit(["--not-found", "lsbk"], answers=["1"])
+        self.assertEqual(self.log_lines(), [])
+        settings = doit.load_settings()
+        settings["logging"] = True
+        doit.save_settings(settings)
+        self.run_doit(["--not-found", "lsbk"], answers=["1"])
+        self.assertIn("typo: lsbk", self.log_lines()[0])
+
+    def test_no_close_match_says_the_old_plain_words(self):
+        code, out, _ = self.run_doit(["--not-found", "xyzzyplugh"], answers=[])
+        self.assertEqual(code, 1)
+        self.assertIn("isn't a program on this PC. It may be spelled differently", out)
 
 
 class TestScanOnUbuntu(DoitTestCase):

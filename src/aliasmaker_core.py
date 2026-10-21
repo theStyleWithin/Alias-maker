@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "1.1.2"
+VERSION = "1.2.0"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"], "clippy_web": None}
@@ -2110,6 +2110,112 @@ def handle(text, state):
     return run_entry_flow(custom_entry(custom, state), norm, state)
 
 
+COMMON_COMMANDS = ("ls", "cd", "cat", "cp", "mv", "rm", "mkdir", "grep", "find", "sudo", "nano", "git",
+                   "python3", "pwd", "echo", "less", "man", "ping", "top", "df", "du", "clear", "chmod",
+                   "tar", "curl", "ssh", "systemctl", "lsblk", "flatpak", "pacman", "apt", "dnf")
+# Programs where running the wrong one can lose data: picking one of these from a typo list asks again.
+RISKY_PROGRAMS = {"rm", "dd", "shred", "wipefs", "fdisk", "sfdisk", "cfdisk", "parted", "mkfs", "mkswap",
+                  "mv", "chmod", "chown", "kill", "killall", "pkill", "reboot", "poweroff", "shutdown",
+                  "halt", "truncate", "umount", "pacman", "apt", "apt-get", "dnf", "zypper", "rpm"}
+
+
+def typo_distance(a, b):
+    """Typing mistakes between two words: letters added, missing, wrong, or two swapped (lsbl -> lsblk,
+    lsbk -> lsblk, sl -> ls each count as one)."""
+    rows = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+    for i in range(len(a) + 1):
+        rows[i][0] = i
+    for j in range(len(b) + 1):
+        rows[0][j] = j
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            rows[i][j] = min(rows[i - 1][j] + 1, rows[i][j - 1] + 1, rows[i - 1][j - 1] + cost)
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                rows[i][j] = min(rows[i][j], rows[i - 2][j - 2] + 1)
+    return rows[len(a)][len(b)]
+
+
+def typo_suggestions(state, name, limit=3):
+    """Up to three programs on this PC (or one-word commands the user made) that `name` is probably a
+    typo of, best first. Looks at what is installed right now, so a program installed a moment ago counts."""
+    name = name.strip()
+    if len(name) < 2 or "/" in name:
+        return []
+    low = name.lower()
+    allowed = 1 if len(low) <= 4 else 2
+    described = {p["name"] for p in (state.library() or {}).get("programs", []) if p.get("description")}
+    found = {}
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        try:
+            entries = list(os.scandir(folder)) if folder else []
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.name not in found and abs(len(entry.name) - len(low)) <= allowed \
+                        and entry.is_file() and os.access(entry.path, os.X_OK):
+                    found[entry.name] = "program"
+            except OSError:
+                continue
+    for custom in state.custom:
+        phrase = normalize(custom["phrase"])
+        if phrase and " " not in phrase:
+            found.setdefault(phrase, "custom")
+    ranked = []
+    for candidate, kind in found.items():
+        if candidate == name:
+            continue
+        distance = typo_distance(low, candidate.lower())
+        if distance > allowed:
+            continue
+        swapped = distance == 1 and sorted(low) == sorted(candidate.lower())
+        ranked.append(((distance, not swapped, kind != "custom", candidate not in COMMON_COMMANDS,
+                        candidate not in described, abs(len(candidate) - len(low)), candidate), candidate, kind))
+    ranked.sort()
+    return [(candidate, kind) for _, candidate, kind in ranked[:limit]]
+
+
+def offer_typo_fix(state, words, suggestions):
+    """Show what the typed word may have meant, and run one if the person picks it. Nothing runs
+    unless they type its number, and the full command is shown first. Returns True if it handled it."""
+    name, extra = words[0], list(words[1:])
+    print(f'"{name}" isn\'t a program on this PC. This looks like a typo. Did you mean:')
+    for number, (candidate, kind) in enumerate(suggestions, 1):
+        print(f"  {number}) {candidate}" + ("   (a command you made)" if kind == "custom" else ""))
+    if not interactive():
+        return False
+    top = len(suggestions)
+    answer = ask(f"Type {'1' if top == 1 else '1-' + str(top)} to run it, or press Enter to skip: ")
+    answer = (answer or "").strip()
+    if not answer.isdigit() or not 1 <= int(answer) <= top:
+        print("Okay, not running anything.")
+        return True
+    candidate, kind = suggestions[int(answer) - 1]
+    command = " ".join([candidate] + [shlex.quote(word) for word in extra])
+    print(f"Running: {command}")
+    if state.dry_run:
+        print(f"[dry run] Would run: {command}")
+        return True
+    if kind == "custom":
+        run_shortcut(state, candidate, extra)
+        return True
+    if candidate in RISKY_PROGRAMS or candidate.startswith("mkfs"):
+        if not is_yes(ask(f"This one can change or remove things. Go ahead? (type {yes_hint(state.settings)}) "),
+                      state.settings):
+            print("Okay, not running anything.")
+            return True
+    try:
+        code = subprocess.run([candidate] + extra).returncode
+    except KeyboardInterrupt:
+        code = 130
+    except OSError as error:
+        print(f"That didn't start: {error.strerror or error}")
+        code = 126
+    write_log(state.settings, f"typo: {name}", command, code)
+    return True
+
+
 def explain_not_found(state, words):
     """The shell couldn't find a command: say why in plain words.
     Returns 0 if it was one of the user's own phrases typed without doit, 1 otherwise."""
@@ -2120,12 +2226,12 @@ def explain_not_found(state, words):
         print(f'"{typed}" is one of your own commands. Put doit in front of it: doit {typed}')
         return 0
     name = words[0]
-    print(f'"{name}" isn\'t a program on this PC. It may be spelled differently, or be part of '
-          "software that isn't installed.")
-    names = [program["name"] for program in (state.library() or {}).get("programs", [])]
-    close = difflib.get_close_matches(name, names, n=3, cutoff=0.75)
-    if close:
-        print("Programs you have with a similar name: " + ", ".join(close))
+    suggestions = typo_suggestions(state, name)
+    if suggestions and offer_typo_fix(state, words, suggestions):
+        return 0  # handled: a suggestion was shown and answered
+    if not suggestions:
+        print(f'"{name}" isn\'t a program on this PC. It may be spelled differently, or be part of '
+              "software that isn't installed.")
     if "steamos" in detect_os()["ids"]:
         print("On SteamOS, add software with Discover (in desktop mode): the system itself is "
               "read-only, so pacman installs don't last.")

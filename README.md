@@ -61,6 +61,8 @@ Every Alias Maker window opens with a big DOIT and your PC's info next to it (fr
 
 The folder after it still tells you where you are (`~` is your home folder), and the ❯ turns red when the last command failed. It's still the same shell underneath (your fish or bash, with all your settings), and the name is only painted on inside Alias Maker: other terminals stay as they were. To keep your own prompt, set `ALIASMAKER_KEEP_PROMPT=1`.
 
+**Typo helper:** if you mistype a command and press Enter, nothing runs. Alias Maker says `This looks like a typo. Did you mean:` and lists up to three programs on your PC that are close (`lsbk` → `lsblk`, `sl` → `ls`, plus any one-word command you made). Type its number and it runs with the same words you typed (the full command is shown first); press Enter to skip. Programs that can change or remove things (`rm`, `dd`, package managers...) ask once more. It works in bash and fish.
+
 **/clippy, the helper:** type `/clippy` and what you're wondering about, and it looks it up instead of running anything. As soon as you press space, `/clippy` turns into `doit clippy` (so it's never shown in red as an unknown command):
 
 ![Typing /clippy: white, then doit clippy after a space; a typo like /clipy stays red](docs/mockups/clippy-typing.png)
