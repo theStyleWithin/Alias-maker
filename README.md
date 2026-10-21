@@ -21,7 +21,7 @@ Report a Problem     crash reports and a health check (Alias Maker Debug)
 
 ![The ☰ menu with Custom Commands open to the side](docs/mockups/menu.png)
 
-- **Database:** every program installed on your PC in a spreadsheet-style table (Command, What it does, Package, Location), searchable by what it does ("drives", "wifi", "battery"), with the best match on top (search "drives" and `lsblk` comes first). Click a column title to sort by it. It's empty until Alias Maker scans your installed software, which happens the first time you open it. Pick a program to read its manual, type it into the terminal, or make a custom command for it. It opens in its own window, the table builds up row by row, and it's read-only.
+- **Database:** every program installed on your PC in a spreadsheet-style table (Command, What it does, Package, Location), searchable by what it does ("drives", "wifi", "battery"), with the best match on top (search "drives" and `lsblk` comes first). Click a column title to sort by it. Alias Maker scans your installed software the first time it opens, and again by itself whenever you install or remove something, so it only ever lists commands that work on your PC. It also checks which system you're on (CachyOS, SteamOS, Arch, Ubuntu, Debian, Fedora…) and reads package details the way that system keeps them: pacman on Arch-based systems, dpkg on Ubuntu and Debian. Pick a program to read its manual, type it into the terminal, or make a custom command for it. It opens in its own window, the table builds up row by row, and it's read-only.
 
   ![The Database window searching "drives", with lsblk first](docs/mockups/database.png)
 
@@ -153,7 +153,9 @@ Shortcuts still go through Alias Maker: they show the real command first, ask be
 
 ### Example commands you can make
 
-Alias Maker doesn't come with ready-made commands. These are examples to get you started: pick one in **Create Command** (or `doit create`), name it whatever you like, and save it.
+Alias Maker doesn't come with ready-made commands. These are examples to get you started: pick one in **Create Command** (or `doit create`), name it whatever you like, and save it. You're only offered the ones that fit your PC: "update my system" uses pacman on CachyOS and Arch, apt on Ubuntu and Debian, and dnf on Fedora (SteamOS's system is read-only, so there it's "update my apps" with `flatpak update` instead), and "take a snapshot" only appears if snapper is installed.
+
+**When a command isn't found,** Alias Maker says why in plain words instead of just "Unknown command": a typo (with programs you have that have a similar name), software that isn't installed (plus your system's own hint on which package has it, when it has one), or one of your own phrases typed without `doit` in front.
 
 | Example phrase | What it would run | What it does |
 |---|---|---|

@@ -141,9 +141,13 @@ function fish_command_not_found
         $argv
         return
     end
+    # Explain in plain words: one of your own phrases typed without doit, a typo, or
+    # software that isn't installed. Stops here if it was one of your phrases.
+    doit --not-found $argv >&2; and return 127
+    # The handler that was there before often says which package has the program (pkgfile
+    # on Arch, command-not-found on Ubuntu). Skip fish's plain default: it would only repeat.
     if functions -q __aliasmaker_previous_command_not_found
+        and not functions __aliasmaker_previous_command_not_found | string match -q '*__fish_default_command_not_found_handler*'
         __aliasmaker_previous_command_not_found $argv
-    else
-        printf "fish: Unknown command: %s\n" $argv[1] >&2
     end
 end
