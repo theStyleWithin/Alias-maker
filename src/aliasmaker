@@ -79,17 +79,26 @@ columnview.aliasmaker-table > listview > row > cell { padding: 6px 10px; }
 # ---------- small helpers ----------
 
 def user_shell():
-    """The user's login shell, the same one Konsole would start."""
+    """The shell to start: the user's login shell, the same one Konsole would start.
+
+    From the AppImage, a login shell that isn't fish gets the AppImage's own fish instead, so
+    the Let'sdostuff~ prompt, /clippy and one-word commands work on any PC (bash on SteamOS and
+    Ubuntu). ALIASMAKER_SHELL=/path/to/shell picks a different one.
+    """
+    chosen = os.environ.get("ALIASMAKER_SHELL", "")
+    if chosen and os.access(chosen, os.X_OK):
+        return chosen
     candidates = []
     try:
         candidates.append(pwd.getpwuid(os.getuid()).pw_shell)
     except KeyError:
         pass
     candidates += [os.environ.get("SHELL", ""), "/bin/bash", "/bin/sh"]
-    for shell in candidates:
-        if shell and os.access(shell, os.X_OK):
-            return shell
-    return "/bin/sh"
+    shell = next((s for s in candidates if s and os.access(s, os.X_OK)), "/bin/sh")
+    bundled = os.environ.get("ALIASMAKER_BUNDLED_FISH", "")
+    if bundled and os.access(bundled, os.X_OK) and os.path.basename(shell) != "fish":
+        return bundled
+    return shell
 
 
 def fish_quote(text):
@@ -588,14 +597,15 @@ class TerminalWindow(Gtk.ApplicationWindow):
         else:
             argv = command or shell_argv(shell)
         env = dict(os.environ)
-        restore, remove = crash.graphics_env_fixes()  # the shell keeps the user's own graphics settings
+        restore, remove = crash.child_env_fixes()  # the shell keeps the user's own settings
         env.update(restore)
         if remove:
             # VTE adds these variables to its own environment instead of replacing it, so
             # taking a variable out of the list isn't enough: env -u removes it, and execs
             # the shell in the same process.
             argv = ["env", *[part for name in remove for part in ("-u", name)], *argv]
-        env["PATH"] = SRC_DIR + os.pathsep + env.get("PATH", "")  # doit always works in here
+        # doit always works in here (from the AppImage: a doit that brings its own Python)
+        env["PATH"] = os.environ.get("ALIASMAKER_DOIT_DIR", SRC_DIR) + os.pathsep + env.get("PATH", "")
         env["ALIASMAKER"] = "1"
         env["TERM_PROGRAM"] = core.TERMINAL_COMMAND  # so tools like fastfetch say "aliasmaker"
         env["ALIASMAKER_NAME"] = TERMINAL_NAME

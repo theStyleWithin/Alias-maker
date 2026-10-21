@@ -232,6 +232,31 @@ def graphics_env_fixes():
     return restore, remove
 
 
+# The AppImage's launcher (packaging/appimage/AppRun) points GTK, Python and friends at its
+# own copies. It remembers each variable as ALIASMAKER_ORIG_<NAME>, or ALIASMAKER_WAS_UNSET_<NAME>.
+BUNDLE_VARS = ("GI_TYPELIB_PATH", "GDK_PIXBUF_MODULEDIR", "GDK_PIXBUF_MODULE_FILE",
+               "GSETTINGS_SCHEMA_DIR", "GIO_MODULE_DIR", "XDG_DATA_DIRS", "SSL_CERT_FILE",
+               "PYTHONNOUSERSITE")
+
+
+def bundle_env_fixes():
+    """(restore, remove) that undo the AppImage launcher's settings; empty outside an AppImage."""
+    restore, remove = {}, []
+    for name in BUNDLE_VARS:
+        if f"ALIASMAKER_ORIG_{name}" in os.environ:
+            restore[name] = os.environ[f"ALIASMAKER_ORIG_{name}"]
+        elif os.environ.get(f"ALIASMAKER_WAS_UNSET_{name}"):
+            remove.append(name)
+    return restore, remove
+
+
+def child_env_fixes():
+    """Everything the shell inside the window must get back, from graphics and the AppImage."""
+    restore, remove = graphics_env_fixes()
+    bundle_restore, bundle_remove = bundle_env_fixes()
+    return {**restore, **bundle_restore}, remove + bundle_remove
+
+
 def system_lines():
     desktop = os.environ.get("XDG_CURRENT_DESKTOP") or "unknown"
     session = os.environ.get("XDG_SESSION_TYPE") or ("wayland" if os.environ.get("WAYLAND_DISPLAY")
