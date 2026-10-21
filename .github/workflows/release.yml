@@ -1,0 +1,69 @@
+# Publishes a release for every new version: when VERSION in src/aliasmaker_core.py changes
+# on main, this tests the code, builds the installer and attaches it to a new release.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        id: version
+        run: |
+          version=$(python3 -c "import sys; sys.path.insert(0, 'src'); import aliasmaker_core as c; print(c.VERSION)")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "Version $version is already released; nothing to do."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install fish for the shell tests
+        if: steps.version.outputs.new == 'true'
+        run: sudo apt-get update -q && sudo apt-get install -y -q fish
+
+      - name: Run the tests
+        if: steps.version.outputs.new == 'true'
+        run: python3 -m unittest discover -s tests
+
+      - name: Build the installer
+        if: steps.version.outputs.new == 'true'
+        run: |
+          packaging/build-installer.sh
+          cp "dist/alias-maker-${{ steps.version.outputs.version }}-installer.run" dist/alias-maker-installer.run
+
+      - name: Publish the release
+        if: steps.version.outputs.new == 'true'
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          cat > notes.md <<EOF
+          Alias Maker $v for CachyOS. This is a test version: please report anything that goes wrong.
+
+          **Install:** download \`alias-maker-installer.run\` below, then in a terminal:
+
+              bash ~/Downloads/alias-maker-installer.run
+
+          **If something goes wrong:** open **Alias Maker Debug** from your app launcher (or ☰ → Report a Problem, or type \`aliasmaker-debug\`), click **Save Everything for the Developer**, and send the file it makes. It never includes what you typed in the terminal, and you can read every word before sending it.
+
+          \`alias-maker-$v-installer.run\` is the same file with the version in its name.
+          EOF
+          gh release create "v$v" \
+            "dist/alias-maker-$v-installer.run" dist/alias-maker-installer.run \
+            --target "$GITHUB_SHA" --title "Alias Maker $v" \
+            --notes-file notes.md --generate-notes

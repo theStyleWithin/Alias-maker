@@ -17,7 +17,8 @@ Current goal: get it working and usable on a real CachyOS PC. Prefer fixing and 
 - Try the engine safely: `src/doit --dry-run <phrase>`
 
 ## Status
-- The engine is tested. The window has never run on real hardware (no GTK/VTE in the sandbox), so treat window code as unverified. The shell start (`spawn_async`) is the least certain part.
+- The engine is tested. The window runs on Ubuntu 24.04 (GTK 4.14, VTE 0.76, fish 3.7) under Xvfb but hasn't been tried on CachyOS yet. To test the window in a sandbox: `apt-get install gir1.2-gtk-4.0 gir1.2-vte-3.91 fish xdotool`, run it with `python3.12` (the system PyGObject) and `GSK_RENDERER=cairo` under `xvfb-run`, and screenshot with `import -window root`.
+- Releases: bump `VERSION` in `src/aliasmaker_core.py`; on `main`, `.github/workflows/release.yml` tests, builds and publishes the installer. Don't commit `.run` files.
 - Known gaps: commands run through `sh` (`subprocess.run(..., shell=True)`), not fish, so fish aliases/syntax fail; the forced "ask first" check only looks for the word `sudo` (misses `doas`, `pkexec`, `run0`, `&&sudo`).
 
 ## Rules

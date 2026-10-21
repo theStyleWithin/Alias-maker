@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Makes alias-maker-<version>-installer.run (in dist/, and a copy in packaging/ for the repo):
+# Makes dist/alias-maker-<version>-installer.run (the Release workflow attaches it to a GitHub release):
 # one file that installs Alias Maker on CachyOS. It carries the PKGBUILD and the source; on the user's PC it runs makepkg.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,8 +20,4 @@ out="$dist/alias-maker-$version-installer.run"
 sed "s/@VERSION@/$version/g" "$here/installer-head.sh" > "$out"
 tar -czf - -C "$work" PKGBUILD "alias-maker-$version.tar.gz" >> "$out"
 chmod +x "$out"
-
-# The copy people download from the repo: packaging/, newest version only.
-rm -f "$here"/alias-maker-*-installer.run
-cp "$out" "$here/"
 echo "$out  (commit $(git -C "$repo" rev-parse --short HEAD))"

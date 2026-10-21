@@ -68,10 +68,10 @@ The rest of the menu works like Konsole's: New Window, Copy, Paste, Full Screen,
 
 ## Install
 
-**The easy way: the installer.** Download `alias-maker-<version>-installer.run` from the [Releases page](https://github.com/theStyleWithin/Alias-maker/releases) (under "Assets"; the newest is also in the [packaging folder](packaging/)), then in a terminal:
+**The easy way: the installer.** Download [alias-maker-installer.run](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/alias-maker-installer.run) (always the newest version; older ones are on the [Releases page](https://github.com/theStyleWithin/Alias-maker/releases)), then in a terminal:
 
 ```
-bash ~/Downloads/alias-maker-0.7.0-installer.run
+bash ~/Downloads/alias-maker-installer.run
 ```
 
 It asks before doing anything, then:
@@ -81,7 +81,7 @@ It asks before doing anything, then:
 
 It asks for your password; run it as yourself, not with `sudo`. Afterwards, open **Alias Maker** from your app launcher, or type `aliasmaker`. To make it your default terminal: System Settings → Default Applications → Terminal emulator → Alias Maker.
 
-To uninstall: `bash alias-maker-0.7.0-installer.run --uninstall`, or `sudo pacman -R alias-maker`. Your own commands and settings (`~/.config/alias-maker`, `~/.local/share/alias-maker`) are kept either way.
+To uninstall: `bash alias-maker-installer.run --uninstall`, or `sudo pacman -R alias-maker`. Your own commands and settings (`~/.config/alias-maker`, `~/.local/share/alias-maker`) are kept either way.
 
 **From the source (for working on Alias Maker itself):**
 
@@ -92,9 +92,9 @@ cd Alias-maker
 ./install.sh
 ```
 
-`install.sh` runs Alias Maker straight from the cloned folder, for your user only. The repo is private, so `git clone` will ask you to sign in to GitHub. Don't use both ways at once: the `install.sh` copy in `~/.local/bin` would run instead of the installed one.
+`install.sh` runs Alias Maker straight from the cloned folder, for your user only. Don't use both ways at once: the `install.sh` copy in `~/.local/bin` would run instead of the installed one.
 
-**Making the installer:** `packaging/build-installer.sh` builds `alias-maker-<version>-installer.run` from the last commit, into `dist/` and the `packaging/` folder (replacing the older one there). It carries `packaging/arch/PKGBUILD` and the source, and runs `makepkg` on the user's PC.
+**Making the installer:** `packaging/build-installer.sh` builds `alias-maker-<version>-installer.run` from the last commit, into `dist/`. You don't need to run it to publish: when the version number in `src/aliasmaker_core.py` changes on `main`, the Release workflow (`.github/workflows/release.yml`) runs the tests, builds the installer and publishes a new release with it. The installer carries `packaging/arch/PKGBUILD` and the source, and runs `makepkg` on the user's PC.
 
 ## For testers: Alias Maker Debug
 
