@@ -7,6 +7,7 @@ It runs your normal shell (fish on CachyOS), like Konsole. The ☰ menu adds:
   Custom Commands   appears once you've made your first command:
                     Custom Command List, Create, Edit, Delete
   Create Command    make your own phrase: doit <your phrase> runs the real command
+  AI                optional chat helper (Claude or Grok, with your own API key)
   Terminal Settings the command log (on/off, and a table of what ran) and how to say yes
 
 Deleting a custom command only deletes your alias, never the real command.
@@ -517,6 +518,7 @@ class TerminalWindow(Gtk.ApplicationWindow):
             custom.append("Delete Command", "win.delete-command")
             ours.append_submenu("Custom Commands", custom)
         ours.append("Create Command", "win.create-command")
+        ours.append("AI", "win.ai")
         ours.append("Terminal Settings", "win.terminal-settings")
         menu.append_section(None, ours)
         sections = [
@@ -561,6 +563,7 @@ class TerminalWindow(Gtk.ApplicationWindow):
             "create-command": lambda: self.app.show_create(self),
             "edit-command": lambda: self.app.show_custom(self, "edit"),
             "delete-command": lambda: self.app.show_custom(self, "delete"),
+            "ai": lambda: self.app.show_ai(self),
             "terminal-settings": lambda: self.app.show_settings(self),
             "new-window": self.app.new_window,
             "copy": self.copy,
@@ -1436,6 +1439,225 @@ class SettingsWindow(Gtk.Window):
         self.say("To say yes, you'll now type: " + core.yes_hint(settings), "success")
 
 
+class AIWindow(Gtk.Window):
+    """AI: an optional chat helper. The key lives on this PC; the AI only gets what's typed in the chat."""
+
+    def __init__(self, app):
+        super().__init__(title=f"AI — {core.APP}")
+        self.app = app
+        self.loading = False
+        self.checking = False
+        self.models = []
+        self.confirm_forget = False
+        self.set_default_size(580, -1)
+        self.set_hide_on_close(True)
+        layout = padded_box(spacing=8)
+
+        layout.append(section_heading("AI helper (optional)"))
+        layout.append(text_label("Chat with an AI in your terminal, so you don't have to open a browser. "
+                                 "It's only a chat: it can't see your files or your screen, and it can't "
+                                 "run anything. You read what it says and decide what to do.", "dim-label"))
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.switch = Gtk.Switch()
+        self.switch.set_valign(Gtk.Align.CENTER)
+        self.switch.connect("notify::active", lambda *_: self.on_switch())
+        self.state = text_label("", wrap=False)
+        self.state.set_hexpand(True)
+        row.append(self.switch)
+        row.append(self.state)
+        layout.append(row)
+
+        layout.append(section_heading("Your API key"))
+        layout.append(text_label("Paste a key from Anthropic (Claude, starts with sk-ant-) or from xAI "
+                                 "(Grok, starts with xai-). The key decides which one you talk to. "
+                                 "Only the key is needed: these services don't take an account "
+                                 "username or password.", "dim-label"))
+        key_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.key = Gtk.PasswordEntry()
+        self.key.set_show_peek_icon(True)
+        self.key.set_hexpand(True)
+        self.key.connect("activate", lambda *_: self.check_key())
+        self.check = Gtk.Button(label="Save and check key")
+        self.check.add_css_class("suggested-action")
+        self.check.connect("clicked", lambda *_: self.check_key())
+        key_row.append(self.key)
+        key_row.append(self.check)
+        layout.append(key_row)
+
+        service_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        service_row.append(text_label("Talks to:", wrap=False))
+        self.service = text_label("", wrap=False)
+        self.service.set_hexpand(True)
+        self.provider_pick = Gtk.DropDown.new_from_strings(["Claude (Anthropic)", "Grok (xAI)"])
+        self.provider_pick.set_visible(False)
+        service_row.append(self.service)
+        service_row.append(self.provider_pick)
+        layout.append(service_row)
+
+        model_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        model_row.append(text_label("Model:", wrap=False))
+        self.model = Gtk.DropDown.new_from_strings([""])
+        self.model.set_hexpand(True)
+        self.model.connect("notify::selected", lambda *_: self.on_model())
+        model_row.append(self.model)
+        layout.append(model_row)
+
+        layout.append(section_heading("What gets sent, and where"))
+        layout.append(text_label("• What you type in the chat goes to the company whose key you used "
+                                 "(Anthropic or xAI), and which Linux you use, so answers fit. Nothing else.\n"
+                                 "• No files, no terminal contents, no commands are sent, and it has no way "
+                                 "to run anything on your PC.\n"
+                                 "• Chats aren't saved on your PC.\n"
+                                 "• Your key is saved in a file only your account can read (not encrypted). "
+                                 "Nothing is sent anywhere until you turn this on and start a chat.",
+                                 "dim-label"))
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.chat = Gtk.Button(label="Chat in the terminal")
+        self.chat.connect("clicked", lambda *_: self.start_chat())
+        self.forget = Gtk.Button(label="Forget my key")
+        self.forget.connect("clicked", lambda *_: self.forget_key())
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        buttons.append(spacer)
+        buttons.append(self.forget)
+        buttons.append(self.chat)
+        layout.append(buttons)
+
+        self.message = text_label("")
+        self.message.set_visible(False)
+        layout.append(self.message)
+        self.set_child(layout)
+        self.reload()
+
+    # --- showing what's saved ---
+
+    def reload(self):
+        self.loading = True
+        config = core.ai_load()
+        has_key = bool(config.get("key"))
+        provider = config.get("provider")
+        self.switch.set_active(core.ai_ready(config))
+        self.state.set_label("On: chat with it using doit ai" if core.ai_ready(config)
+                             else ("Off" if has_key else "Off: add a key first"))
+        self.key.set_text("")
+        self.key.set_tooltip_text("A key is saved (hidden). Paste a new one to replace it." if has_key else None)
+        self.service.set_label(
+            f"{core.AI_PROVIDERS[provider]['name']} ({core.AI_PROVIDERS[provider]['company']})"
+            if provider in core.AI_PROVIDERS else "(paste a key above)")
+        self.provider_pick.set_visible(False)
+        self.set_models([config["model"]] if config.get("model") else [], config.get("model"))
+        self.chat.set_sensitive(core.ai_ready(config))
+        self.forget.set_sensitive(has_key)
+        self.forget.set_label("Forget my key")
+        self.confirm_forget = False
+        self.loading = False
+
+    def set_models(self, models, chosen):
+        self.models = list(models)
+        self.model.set_model(Gtk.StringList.new(self.models or ["(check the key to see models)"]))
+        self.model.set_sensitive(bool(self.models))
+        if chosen in self.models:
+            self.model.set_selected(self.models.index(chosen))
+
+    def say(self, text, kind):
+        for css in ("error", "success"):
+            self.message.remove_css_class(css)
+        self.message.add_css_class(kind)
+        self.message.set_label(text)
+        self.message.set_visible(True)
+
+    # --- actions ---
+
+    def on_switch(self):
+        if self.loading:
+            return
+        config = core.ai_load()
+        if not config.get("key"):
+            self.say("Add and check a key first.", "error")
+            self.loading = True
+            self.switch.set_active(False)
+            self.loading = False
+            return
+        config["enabled"] = self.switch.get_active()
+        core.ai_save(config)
+        self.reload()
+        self.say("The AI helper is on. Start a chat with the button below, or type: doit ai"
+                 if config["enabled"] else "The AI helper is off. Your key is still saved.", "success")
+
+    def on_model(self):
+        if self.loading or not self.models:
+            return
+        config = core.ai_load()
+        chosen = self.models[self.model.get_selected()]
+        if config.get("key") and config.get("model") != chosen:
+            config["model"] = chosen
+            core.ai_save(config)
+            self.say(f"Using {chosen}.", "success")
+
+    def check_key(self):
+        if self.checking:
+            return
+        saved = core.ai_load()
+        typed = self.key.get_text().strip()
+        config = dict(saved) if not typed else {"key": typed, "enabled": True}
+        if not config.get("key"):
+            self.say("Paste your API key first.", "error")
+            return
+        if typed:
+            provider = core.ai_provider_for_key(typed)
+            if provider is None:
+                self.provider_pick.set_visible(True)
+                provider = ("claude", "grok")[self.provider_pick.get_selected()]
+                self.say("I don't recognise that key, so I'm using the service picked above. "
+                         "Press the button again if that's right.", "error")
+                if not getattr(self, "asked_provider", False):
+                    self.asked_provider = True
+                    return
+            config["provider"] = provider
+        self.checking = True
+        self.check.set_sensitive(False)
+        self.say("Checking the key...", "success")
+
+        def work():
+            try:
+                models, chosen = core.ai_check(config)
+                error = None
+            except core.AIError as err:
+                models, chosen, error = [], None, str(err)
+            GLib.idle_add(self.checked, config, models, chosen, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def checked(self, config, models, chosen, error):
+        self.checking = False
+        self.check.set_sensitive(True)
+        if error:
+            self.say(error, "error")
+            return False
+        config["model"] = chosen
+        config.setdefault("enabled", True)
+        core.ai_save(config)
+        self.reload()
+        self.set_models(models, chosen)
+        self.say(f"The key works. Using {chosen}. You can pick another model below.", "success")
+        return False
+
+    def start_chat(self):
+        terminal = self.app.terminal()
+        terminal.type_into_terminal("doit ai", run=True)
+
+    def forget_key(self):
+        if not self.confirm_forget:
+            self.confirm_forget = True
+            self.forget.set_label("Click again to delete the key")
+            return
+        core.ai_forget()
+        self.asked_provider = False
+        self.reload()
+        self.say("Done. The key and AI settings are deleted from this PC.", "success")
+
+
 class LogWindow(Gtk.Window):
     """The command log as a table, newest first. Read-only."""
 
@@ -1520,6 +1742,7 @@ class AliasMakerApp(Gtk.Application):
         self.database_window = None
         self.custom_window = None
         self.settings_window = None
+        self.ai_window = None
         self.log_window = None
         self.examples = core.load_examples()  # starting points for Create Command
 
@@ -1579,6 +1802,12 @@ class AliasMakerApp(Gtk.Application):
             self.settings_window = SettingsWindow(self)
         self.settings_window.reload()
         self.settings_window.present()
+
+    def show_ai(self, parent):
+        if self.ai_window is None:
+            self.ai_window = AIWindow(self)
+        self.ai_window.reload()
+        self.ai_window.present()
 
     def show_log(self, parent):
         """Opens the Command Log in its own window and builds the table up gradually."""

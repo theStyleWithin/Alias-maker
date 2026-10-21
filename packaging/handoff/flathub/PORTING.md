@@ -8,8 +8,8 @@ sandbox with `os.path.exists("/.flatpak-info")`.
 
 Line numbers are for version @VERSION@.
 
-1. **Starting the shell** (`src/aliasmaker`: `user_shell()` around line 82, `shell_argv()`
-   around line 93, the spawn around line 625). Find the host shell with
+1. **Starting the shell** (`src/aliasmaker`: `user_shell()` around line 83, `shell_argv()`
+   around line 94, the spawn around line 628). Find the host shell with
    `flatpak-spawn --host getent passwd $USER`, then start it as
    `flatpak-spawn --host --watch-bus --directory=<folder> --env=TERM=xterm-256color
    --env=PATH=<host PATH plus the folder from step 2> <shell> ...`. Check job control and
@@ -18,14 +18,14 @@ Line numbers are for version @VERSION@.
 2. **Files the host shell uses.** The fish script (`FISH_TITLE_SCRIPT`, line 67), `doit` and
    the engine live in `/app`, which the host can't see. Copy `src/` once per version to a
    host-visible folder (e.g. `~/.local/share/alias-maker/host/`), and use that copy for the
-   `--init-command` path and for the `PATH` set around line 597. They're plain Python and
+   `--init-command` path and for the `PATH` set around line 600. They're plain Python and
    run with the host's `python3`.
 
 3. **One-word commands** (`src/aliasmaker_core.py`, `doit_command()` around line 463). The
    fish file must point at the host copy from step 2, not `/app/...`.
 
 4. **Running commands** (`run_entry()`, the `subprocess.run(..., shell=True)` around line
-   2000). This only runs on the host once steps 1–2 are done (doit then runs on the host).
+   2322). This only runs on the host once steps 1–2 are done (doit then runs on the host).
    Make sure no code path runs doit inside the sandbox.
 
 5. **The Database scan** (`scan_library()` around line 810, the PATH walk around line 685,

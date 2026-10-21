@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"], "clippy_web": None}
@@ -1028,12 +1028,17 @@ CERT_FILES = ("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundl
               "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem")
 
 
+def ssl_context():
+    """Trusted certificates for web requests (None: Python's own default)."""
+    import ssl
+    cafile = next((path for path in CERT_FILES if os.path.isfile(path)), None)
+    return ssl.create_default_context(cafile=cafile) if cafile else None
+
+
 def fetch_text(url, timeout=8):
     """Download a page. Raises OSError (including URLError) if it can't."""
-    import ssl
     import urllib.request
-    cafile = next((path for path in CERT_FILES if os.path.isfile(path)), None)
-    context = ssl.create_default_context(cafile=cafile) if cafile else None
+    context = ssl_context()
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
         raw = response.read()
@@ -1450,6 +1455,318 @@ def read_manual_page(name):
     return subprocess.run(["man", name]).returncode
 
 
+# ---------- the AI helper (optional, off until you set it up) ----------
+#
+# A plain chat with Claude (Anthropic) or Grok (xAI), using the person's own API key. It gets only
+# what they type here: no files, no screen, no terminal contents, and no tools, so it cannot run
+# anything. Nothing it says is run. The conversation lives in memory and is gone when the chat ends.
+
+AI_WORD = "ai"
+AI_FILE_NAME = "ai.json"
+AI_PROVIDERS = {
+    "claude": {"name": "Claude", "company": "Anthropic", "base": "https://api.anthropic.com",
+               "key_start": "sk-ant-", "key_page": "console.anthropic.com"},
+    "grok": {"name": "Grok", "company": "xAI", "base": "https://api.x.ai",
+             "key_start": "xai-", "key_page": "console.x.ai"},
+}
+AI_QUIT_WORDS = {"/bye", "bye", "exit", "quit", "/exit", "/quit", "never mind", "goodbye"}
+AI_MAX_TURNS = 20
+
+
+class AIError(Exception):
+    """Something went wrong talking to the AI service, in words for a beginner."""
+
+
+def ai_path():
+    return config_dir() / AI_FILE_NAME
+
+
+def ai_load():
+    """The saved AI setup: {"provider", "key", "model", "enabled", "notice_seen"} (empty if none)."""
+    data = read_json(ai_path(), {})
+    return data if isinstance(data, dict) else {}
+
+
+def ai_save(config):
+    """Save the AI setup in a file only this account can read (the key is in it, not encrypted)."""
+    path = ai_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+
+
+def ai_forget():
+    """Delete the saved key and settings."""
+    try:
+        ai_path().unlink()
+    except FileNotFoundError:
+        pass
+
+
+def ai_provider_for_key(key):
+    """Which service a key belongs to, from how it starts (None if it isn't one we know)."""
+    key = (key or "").strip()
+    for name, info in AI_PROVIDERS.items():
+        if key.startswith(info["key_start"]):
+            return name
+    return None
+
+
+def ai_ready(config):
+    return bool(config.get("enabled") and config.get("key") and config.get("provider") in AI_PROVIDERS)
+
+
+def ai_request(config, method, path, body=None, timeout=60):
+    """One call to the AI service. Returns the answer as a dict. Raises AIError with plain words;
+    the key never appears in an error."""
+    import urllib.error
+    import urllib.request
+    provider = AI_PROVIDERS[config["provider"]]
+    base = os.environ.get("ALIASMAKER_AI_BASE") or provider["base"]
+    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
+    if config["provider"] == "claude":
+        headers["x-api-key"] = config["key"]
+        headers["anthropic-version"] = "2023-06-01"
+    else:
+        headers["Authorization"] = "Bearer " + config["key"]
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(base.rstrip("/") + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout, context=ssl_context()) as response:
+            return json.loads(response.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as error:
+        who = provider["company"]
+        if error.code in (401, 403):
+            raise AIError(f"{who} didn't accept that key. Check it was copied completely, "
+                          f"and that it's still active at {provider['key_page']}.") from None
+        if error.code == 404:
+            raise AIError("That AI model isn't available to your key. Pick another one in ☰ → AI.") from None
+        if error.code == 429:
+            raise AIError(f"{who} says you've asked too much for now, or your account is out of credit. "
+                          "Wait a bit, or check your account.") from None
+        if error.code >= 500:
+            raise AIError(f"{who}'s service is having trouble right now. Try again in a minute.") from None
+        raise AIError(f"{who} couldn't answer (error {error.code}).") from None
+    except (urllib.error.URLError, OSError):
+        raise AIError("I couldn't reach the AI service. Are you online?") from None
+    except ValueError:
+        raise AIError("The AI service sent something I couldn't read. Try again.") from None
+
+
+def ai_models(config):
+    """The models this key can use, as names (newest first as the service lists them)."""
+    answer = ai_request(config, "GET", "/v1/models?limit=100", timeout=20)
+    return [str(m["id"]) for m in answer.get("data", []) if isinstance(m, dict) and m.get("id")]
+
+
+def ai_default_model(provider, models):
+    """A sensible everyday model from a list: Claude's Sonnet, or Grok's first text model."""
+    if provider == "claude":
+        for word in ("sonnet", "haiku", "opus"):
+            for model in models:
+                if word in model:
+                    return model
+    else:
+        for model in models:
+            if not any(word in model for word in ("image", "vision", "imagine", "embed", "video")):
+                return model
+    return models[0] if models else ""
+
+
+def ai_check(config):
+    """Test a key. Returns (models, chosen model). Raises AIError."""
+    models = ai_models(config)
+    if not models:
+        raise AIError("The key works, but no AI models are available to it.")
+    chosen = config.get("model") if config.get("model") in models else ai_default_model(config["provider"], models)
+    return models, chosen
+
+
+def ai_system_prompt():
+    this_os = detect_os()
+    tool = package_tool()
+    return (
+        "You are a friendly helper inside Alias Maker, a terminal app made for people who are new to "
+        "Linux. Answer in plain, short words and explain any jargon. You are only a chat: you cannot "
+        "see the person's files, screen or terminal, and you cannot run anything. If a command would "
+        "help, write it as plain text and say what it does, and let the person decide whether to run "
+        "it themselves. Warn clearly before anything that deletes or changes things. "
+        f"The person's PC runs {this_os['name']}"
+        + (f" (it uses {tool} for software)" if tool else "")
+        + ", so suggest only commands that fit it. If you don't know, say so."
+    )
+
+
+CONTROL_CODES = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[@-Z\\-_]"
+                           r"|[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def plain_reply(text):
+    """The AI's words with anything that could steer the terminal removed (colour codes, cursor
+    moves, title changes): only text and line breaks stay."""
+    return CONTROL_CODES.sub("", str(text)).replace("\r", "").strip()
+
+
+def ai_reply(config, history):
+    """Send the conversation and return the answer as text. history: [{"role", "content"}, ...]."""
+    model = config.get("model")
+    if not model:
+        raise AIError("No AI model is chosen yet. Open ☰ → AI and press Check key.")
+    system = ai_system_prompt()
+    if config["provider"] == "claude":
+        answer = ai_request(config, "POST", "/v1/messages",
+                            {"model": model, "max_tokens": 1024, "system": system, "messages": history})
+        parts = [b.get("text", "") for b in answer.get("content", []) if isinstance(b, dict) and b.get("type") == "text"]
+    else:
+        answer = ai_request(config, "POST", "/v1/chat/completions",
+                            {"model": model, "max_tokens": 1024,
+                             "messages": [{"role": "system", "content": system}] + history})
+        try:
+            parts = [answer["choices"][0]["message"]["content"] or ""]
+        except (KeyError, IndexError, TypeError):
+            parts = []
+    text = plain_reply("".join(parts))
+    if not text:
+        raise AIError("The AI sent back an empty answer. Try asking again.")
+    return text
+
+
+def ai_first_notice(config):
+    """Say once, plainly, what goes where. Returns False if they'd rather not."""
+    if config.get("notice_seen"):
+        return True
+    info = AI_PROVIDERS[config["provider"]]
+    print(f"This chats with {info['name']} ({info['company']}), using your own key.")
+    print(f"  - What you type here is sent to {info['company']}, and nothing else is: no files, nothing")
+    print("    from your screen or terminal. I also tell it which Linux you use so answers fit.")
+    print("  - It can't run anything on your PC, and nothing it writes is run. If it suggests a")
+    print("    command, you read it first and run it yourself, or not.")
+    print("  - The chat isn't saved on your PC; it's gone when you leave.")
+    answer = ask(f"Okay to chat? (type {yes_hint(load_settings())} for yes) ")
+    if not is_yes(answer, load_settings()):
+        print("Okay, not chatting.")
+        return False
+    config["notice_seen"] = True
+    ai_save(config)
+    print()
+    return True
+
+
+def ai_chat(first_message=""):
+    config = ai_load()
+    if not ai_ready(config):
+        print("The AI helper isn't set up yet. In the Alias Maker window: ☰ → AI. "
+              "Or in a terminal: doit ai setup")
+        return 1
+    if not interactive():
+        print("The AI chat needs you at a terminal.")
+        return 2
+    if not ai_first_notice(config):
+        return 0
+    info = AI_PROVIDERS[config["provider"]]
+    print(f"Chatting with {info['name']} ({config.get('model')}). It can't see your files or run "
+          "anything. Type /bye to leave.\n")
+    history = []
+    text = first_message.strip()
+    while True:
+        if not text:
+            text = ask("You: ")
+            if text is None:
+                print("\nBye!")
+                return 0
+            text = text.strip()
+            if not text:
+                continue
+        if normalize(text) in AI_QUIT_WORDS:
+            print("Bye!")
+            return 0
+        history.append({"role": "user", "content": text})
+        text = ""
+        print("(thinking...)")
+        try:
+            answer = ai_reply(config, history[-AI_MAX_TURNS * 2:])
+        except AIError as error:
+            history.pop()
+            print(f"\n{error}\n")
+            continue
+        except KeyboardInterrupt:
+            history.pop()
+            print("\nOkay, stopped waiting.\n")
+            continue
+        history.append({"role": "assistant", "content": answer})
+        print(f"\n{info['name']}: {answer}\n")
+
+
+def ai_setup():
+    """Type the key in the terminal (nothing shows while typing). Only the API key is needed:
+    these services don't take an account's password."""
+    import getpass
+    if not interactive():
+        print("Setting up the AI helper needs you at a terminal, or use ☰ → AI in the window.")
+        return 2
+    print("Paste your API key (nothing shows while you type). Claude keys come from console.anthropic.com,")
+    print("Grok keys from console.x.ai. Only the key is needed, never your account password.")
+    try:
+        key = getpass.getpass("API key: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return 1
+    if not key:
+        print("Okay, nothing saved.")
+        return 0
+    provider = ai_provider_for_key(key)
+    if provider is None:
+        answer = normalize(ask("I don't recognise that key. Is it for claude or grok? ") or "")
+        provider = answer if answer in AI_PROVIDERS else None
+        if provider is None:
+            print("Okay, nothing saved.")
+            return 1
+    config = {"provider": provider, "key": key, "enabled": True}
+    print("Checking the key...")
+    try:
+        models, config["model"] = ai_check(config)
+    except AIError as error:
+        print(error)
+        return 1
+    ai_save(config)
+    print(f"Saved. Using {AI_PROVIDERS[provider]['name']}, model {config['model']}. Start chatting with: doit ai")
+    return 0
+
+
+def ai_command(state, arg):
+    """doit ai [setup | forget | on | off | status | <a question to start with>]."""
+    word = normalize(arg)
+    if word == "setup":
+        return ai_setup()
+    if word == "forget":
+        ai_forget()
+        print("Done. The key and the AI settings are deleted from this PC.")
+        return 0
+    if word in ("on", "off"):
+        config = ai_load()
+        if not config.get("key"):
+            print("There's no key yet. Set one up with: doit ai setup")
+            return 1
+        config["enabled"] = word == "on"
+        ai_save(config)
+        print(f"The AI helper is now {word}.")
+        return 0
+    if word == "status":
+        config = ai_load()
+        if not config.get("key"):
+            print("The AI helper isn't set up. (☰ → AI, or doit ai setup)")
+        else:
+            info = AI_PROVIDERS.get(config.get("provider"), {"name": "unknown"})
+            print(f"AI helper: {'on' if config.get('enabled') else 'off'}, {info['name']}, "
+                  f"model {config.get('model') or 'not chosen'}. The key is saved on this PC, not shown.")
+        return 0
+    return ai_chat(arg)
+
+
 # ---------- the welcome: DOIT and your PC's info ----------
 
 def logo_path():
@@ -1673,6 +1990,8 @@ def match_builtin(norm):
         return ("version", None)
     if words[0] in (HELPER_NAME, "/" + HELPER_NAME):
         return ("clippy", " ".join(words[1:]))
+    if words[0] in (AI_WORD, "/" + AI_WORD):
+        return ("ai", " ".join(words[1:]))
     if words[0] in ("forget", "delete"):
         return ("forget", " ".join(words[1:]))
     if len(words) == 2 and words[0] == "logging" and words[1] in ("on", "off"):
@@ -1704,6 +2023,8 @@ def run_builtin(name, arg, state):
         return 0
     if name == "clippy":
         return clippy(state, arg)
+    if name == "ai":
+        return ai_command(state, arg)
     if not interactive():
         print("That one needs you at a terminal to answer questions.")
         return 2
@@ -1739,6 +2060,7 @@ def show_help(examples):
             ("doit create", "make your own command, step by step"),
             ("doit forget <phrase>", "delete one of your commands (also: doit delete)"),
             ("/clippy <topic>", "look a topic up instead of running it (also: doit clippy)"),
+            ("/ai or doit ai", "chat with an AI helper, if you set one up (☰ → AI)"),
             ("doit show me what you did", "your command history, if the log is on"),
             ("doit logging on / off", "turn the command log on or off"),
             ("doit answer easy / strict", "say yes with y or yes, or only with yes"),
@@ -2090,6 +2412,9 @@ def handle(text, state):
     norm = normalize(text)
     builtin = match_builtin(norm)
     if builtin:
+        if builtin[0] == "ai":  # the AI gets your words exactly as typed (capitals matter in file names)
+            parts = text.split(None, 1)
+            builtin = ("ai", parts[1].strip() if len(parts) > 1 else "")
         return run_builtin(*builtin, state)
     custom = state.custom_map.get(norm)
     if custom is None and re.search(r"[-_]", norm):  # check-my-drives: dashes typed for spaces

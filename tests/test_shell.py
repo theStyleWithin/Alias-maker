@@ -154,6 +154,12 @@ class TestBashSetup(DoitTestCase):
         self.assertIn("CLIPPY-LOOKUP: clippy chrooting", out)
         self.assertIn("DOIT: --version", self.bash.run("doit --version", "DOIT: --version"), "other lines are left alone")
 
+    def test_ai_is_a_slash_command_too(self):
+        out = self.bash.run("/ai how do I unzip", "DOIT: ai how do I unzip")
+        self.assertIn("DOIT: ai how do I unzip", out)
+        time.sleep(1)  # let the prompt come back before typing the next line
+        self.assertIn("DOIT: ai", self.bash.run("/ai", "DOIT: ai"))
+
     def test_your_one_word_commands_work_even_one_made_while_the_prompt_waited(self):
         out = self.bash.run("sayhi", "hello-shortcut")
         self.assertIn("Real command: echo hello-shortcut", out)

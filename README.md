@@ -63,6 +63,12 @@ The folder after it still tells you where you are (`~` is your home folder), and
 
 **Typo helper:** if you mistype a command and press Enter, nothing runs. Alias Maker says `This looks like a typo. Did you mean:` and lists up to three programs on your PC that are close (`lsbk` → `lsblk`, `sl` → `ls`, plus any one-word command you made). Type its number and it runs with the same words you typed (the full command is shown first); press Enter to skip. Programs that can change or remove things (`rm`, `dd`, package managers...) ask once more. It works in bash and fish.
 
+**AI helper (optional, off until you set it up):** if you'd rather ask an AI than open a browser, ☰ → **AI** opens its own settings. Paste an API key and it connects to Claude (keys start with `sk-ant-`, from console.anthropic.com) or Grok (keys start with `xai-`, from console.x.ai): the key decides which one. Then type `/ai` (or `doit ai`) in the terminal and chat. Only the key is needed; the services don't take an account username or password, so Alias Maker never asks for one.
+
+![The AI settings window: before a key is added, and after the key checks out](docs/mockups/ai-settings-empty.png) ![After the key is checked](docs/mockups/ai-settings-ready.png)
+
+It's only a chat. It can't see your files or your screen, it has no way to run anything, and nothing it writes is ever run: if it suggests a command, you read it and decide. What you type goes to the company whose key you used (Anthropic or xAI), along with the name of your Linux so its commands fit; nothing else is sent. Chats aren't saved on your PC. Your key is kept in a file only your account can read (not encrypted). It's light: no extra programs, no background service, about 20 MB while a chat is open. Other words: `doit ai status`, `doit ai off`, `doit ai forget` (deletes the key), `doit ai setup` (type the key in the terminal instead).
+
 **/clippy, the helper:** type `/clippy` and what you're wondering about, and it looks it up instead of running anything. As soon as you press space, `/clippy` turns into `doit clippy` (so it's never shown in red as an unknown command):
 
 ![Typing /clippy: white, then doit clippy after a space; a typo like /clipy stays red](docs/mockups/clippy-typing.png)
@@ -136,7 +142,7 @@ Nothing is started that you don't see in a process list with its name on it, and
 - **Opening the window:** one `aliasmaker` process (Python), and your own shell (bash or fish) inside it. The AppImage itself shows up once as `Alias-Maker-x86_64.AppImage`, its launcher.
 - **While you use it:** `doit` starts for a moment each time you use it. The Database scan (when you first open it, and again after software is installed or removed) runs read-only helpers one after another for a second or two (`whatis`, and `pacman` or `dpkg-query`). It never runs the programs it lists.
 - **Only if you ask:** `xdg-open` for a `/clippy` result, `man` for a manual page, and the commands you made.
-- **Never:** pop-up dialogs, background services, or anything left running after you close the window. No network use except `/clippy`'s lookups on your own system's documentation sites, and only when you type `/clippy`. Question-and-answer sites (stackexchange.com) only if you said yes.
+- **Never:** pop-up dialogs, background services, or anything left running after you close the window. No network use except `/clippy`'s lookups on your own system's documentation sites, and only when you type `/clippy`. Question-and-answer sites (stackexchange.com) only if you said yes. The AI helper only talks to Anthropic or xAI, and only after you've added a key, turned it on and started a chat.
 
 On a Steam Deck in desktop mode, some programs that draw with Vulkan get a "Gamescope WSI Layer Error" pop-up (that's a separate zenity window made by Valve's Gamescope layer). Alias Maker avoids it by drawing with OpenGL instead of Vulkan (and switching Vulkan off for itself), and the shell inside the window never sees that setting.
 
