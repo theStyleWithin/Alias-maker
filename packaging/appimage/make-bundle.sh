@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fills an AppDir with everything Alias Maker needs to run on a PC that has none of it:
-# Python, PyGObject, GTK 4, VTE and fish, from this machine's Ubuntu 24.04 packages. The PC
+# Python, PyGObject, GTK 4 and VTE from this machine's Ubuntu 24.04 packages, plus fish from its
+# official static build (it needs no data folder; Ubuntu's fish 3.7 looks in /usr/share/fish). The PC
 # only has to provide what a desktop always has: the C library, the graphics stack (OpenGL,
 # X11/Wayland), fonts and fontconfig.
 #
@@ -9,8 +10,8 @@
 #
 #   make-bundle.sh APPDIR
 #
-# Needs: python3 python3-gi gir1.2-gtk-4.0 gir1.2-vte-3.91 librsvg2-common adwaita-icon-theme
-#        fish patchelf libglib2.0-bin libgdk-pixbuf2.0-bin libgtk-4-common binutils
+# Needs: python3-gi gir1.2-gtk-4.0 gir1.2-vte-3.91 librsvg2-common adwaita-icon-theme patchelf
+#        libglib2.0-bin libgdk-pixbuf2.0-bin libgtk-4-common binutils xz-utils curl
 set -euo pipefail
 
 dir="$(mkdir -p "$1" && realpath "$1")"
@@ -19,6 +20,11 @@ lib=/usr/lib/x86_64-linux-gnu
 gi_so=$(ls /usr/lib/python3/dist-packages/gi/_gi.cpython-3*-x86_64-linux-gnu.so | head -1)
 pyv=$(sed -E 's/.*cpython-3([0-9]+)-.*/3.\1/' <<<"$gi_so")
 mkdir -p "$dir/usr/bin" "$dir/usr/lib" "$dir/usr/share"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+FISH_VERSION=4.9.3
+FISH_SHA256=8f643d10ad1abb0ef7072764c01ceb5cf61b2d373fda400cf60f0bad69b7e095
 
 # What the PC provides itself: never copied.
 EXCLUDE='^(ld-linux[^ ]*|linux-vdso[^ ]*|libc|libm|libdl|libpthread|librt|libutil|libresolv|libnsl|libanl|libBrokenLocale|libthread_db|libnss_[a-z]+)\.so'
@@ -71,10 +77,12 @@ loaders_dir="$lib/gdk-pixbuf-2.0/2.10.0/loaders"
 mkdir -p "$dir/usr/lib/gdk-pixbuf-2.0/loaders"
 cp "$loaders_dir"/*.so "$dir/usr/lib/gdk-pixbuf-2.0/loaders/"
 
-# ---------- fish ----------
-cp -L /usr/bin/fish "$dir/usr/bin/fish"
-mkdir -p "$dir/usr/share"
-tar -C /usr/share -cf - --exclude='man' fish | tar -C "$dir/usr/share" -xf -
+# ---------- fish: the official static build, checked against a pinned checksum ----------
+curl -fsSL -o "$tmp/fish.tar.xz" \
+    "https://github.com/fish-shell/fish-shell/releases/download/$FISH_VERSION/fish-$FISH_VERSION-linux-x86_64.tar.xz"
+echo "$FISH_SHA256  $tmp/fish.tar.xz" | sha256sum -c - >/dev/null
+tar -xJf "$tmp/fish.tar.xz" -C "$tmp" fish
+install -m755 "$tmp/fish" "$dir/usr/bin/fish"
 
 # ---------- libraries ----------
 extra=()
@@ -85,7 +93,7 @@ for soname in libgtk-4.so.1 libvte-2.91-gtk4.so.0 libgirepository-1.0.so.1 libpa
     [[ -n "$path" ]] && extra+=("$path")
 done
 mapfile -t elfs < <(find "$dir/usr/bin" "$dir/usr/lib/python$pyv/lib-dynload" "$dir/usr/lib/python3/dist-packages" \
-                         "$dir/usr/lib/gdk-pixbuf-2.0/loaders" -type f \( -name '*.so' -o -name '*.so.*' -o -path '*/usr/bin/*' \))
+                         "$dir/usr/lib/gdk-pixbuf-2.0/loaders" -type f \( -name '*.so' -o -name '*.so.*' -o -path '*/usr/bin/python*' \))
 add_libs_of "${elfs[@]}" "${extra[@]}"
 for path in "${extra[@]}"; do
     name=$(basename "$path")
@@ -106,7 +114,7 @@ while IFS= read -r f; do
     [[ "$(head -c4 "$f" | tr -d '\0')" == $'\x7fELF' ]] || continue
     strip --strip-unneeded "$f" 2>/dev/null || true
     set_rpath "$f"
-done < <(find "$dir/usr" -type f \( -name '*.so' -o -name '*.so.*' -o -path '*/usr/bin/*' \))
+done < <(find "$dir/usr" -type f \( -name '*.so' -o -name '*.so.*' -o -path '*/usr/bin/python*' \))
 
 # ---------- data GTK looks for ----------
 mkdir -p "$dir/usr/share/glib-2.0/schemas"
@@ -120,9 +128,9 @@ cp /usr/share/icons/Adwaita/index.theme "$dir/usr/share/icons/Adwaita/"
 cp -a /usr/share/icons/Adwaita/symbolic "$dir/usr/share/icons/Adwaita/"
 mkdir -p "$dir/usr/share/icons/hicolor" && cp /usr/share/icons/hicolor/index.theme "$dir/usr/share/icons/hicolor/"
 
-# the pixbuf loader list: just the file names, found through GDK_PIXBUF_MODULEDIR (see AppRun)
+# the pixbuf loader list: a template, because it needs this run's real path (AppRun fills it in)
 "$lib/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders" "$dir"/usr/lib/gdk-pixbuf-2.0/loaders/*.so |
-    sed "s|$dir/usr/lib/gdk-pixbuf-2.0/loaders/||" > "$dir/usr/lib/gdk-pixbuf-2.0/loaders.cache"
-grep -q 'svg' "$dir/usr/lib/gdk-pixbuf-2.0/loaders.cache" || { echo "make-bundle: the pixbuf loader list is empty" >&2; exit 1; }
+    sed "s|$dir|@APPDIR@|g" > "$dir/usr/lib/gdk-pixbuf-2.0/loaders.cache.in"
+grep -q 'svg' "$dir/usr/lib/gdk-pixbuf-2.0/loaders.cache.in" || { echo "make-bundle: the pixbuf loader list is empty" >&2; exit 1; }
 
 du -sh "$dir" | cut -f1

@@ -27,7 +27,7 @@ mkdir -p "$bundle/usr/lib/alias-maker/bin" "$bundle/usr/lib/gio-modules"
 git -C "$repo" archive HEAD src data LICENSE | tar -x -C "$bundle/usr/lib/alias-maker"
 cat > "$bundle/usr/lib/alias-maker/bin/doit" <<'SHIM'
 #!/bin/sh
-exec "$(dirname "$(readlink -f "$0")")/../../../../AppRun" doit "$@"
+exec "${0%/*}/../../../../AppRun" doit "$@"
 SHIM
 chmod +x "$bundle/usr/lib/alias-maker/bin/doit"
 # Compiled ahead of time, because the AppImage is read-only: faster to open

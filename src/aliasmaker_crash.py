@@ -234,9 +234,8 @@ def graphics_env_fixes():
 
 # The AppImage's launcher (packaging/appimage/AppRun) points GTK, Python and friends at its
 # own copies. It remembers each variable as ALIASMAKER_ORIG_<NAME>, or ALIASMAKER_WAS_UNSET_<NAME>.
-BUNDLE_VARS = ("GI_TYPELIB_PATH", "GDK_PIXBUF_MODULEDIR", "GDK_PIXBUF_MODULE_FILE",
-               "GSETTINGS_SCHEMA_DIR", "GIO_MODULE_DIR", "XDG_DATA_DIRS", "SSL_CERT_FILE",
-               "PYTHONNOUSERSITE")
+BUNDLE_VARS = ("GI_TYPELIB_PATH", "GDK_PIXBUF_MODULE_FILE", "GSETTINGS_SCHEMA_DIR",
+               "GIO_MODULE_DIR", "XDG_DATA_DIRS", "SSL_CERT_FILE", "PYTHONNOUSERSITE")
 
 
 def bundle_env_fixes():
@@ -540,12 +539,24 @@ def health_check():
     add(OK if py >= (3, 9) else BAD, "Python", platform.python_version()
         + ("" if py >= (3, 9) else " (too old: Alias Maker needs 3.9 or newer)"))
 
+    in_appimage = bool(os.environ.get("ALIASMAKER_BUNDLED_FISH"))
     code, out = _run([sys.executable, "-c", GI_PROBE])
     found = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
-    if code is None or code < 0:
+    if in_appimage:
+        for key, what in (("GTK", "GTK 4"), ("VTE", "VTE (the terminal part)")):
+            if key in found:
+                add(OK, what, f"{found[key]} (built into the AppImage)")
+            else:
+                add(BAD, what, f"the AppImage couldn't load it: {found.get(key + '-missing', out or code)}")
+        found = {"PyGObject": found.get("PyGObject", "?"), "GTK": "x", "VTE": "x"}  # reported above
+    if in_appimage and "PyGObject" not in found:
+        add(BAD, "PyGObject", "the AppImage couldn't load it")
+    elif code is None or code < 0:
         add(BAD, "GTK and VTE", f"checking them crashed ({out or code}). Try: sudo pacman -S gtk4 vte4 python-gobject")
     elif "PyGObject" not in found:
         add(BAD, "PyGObject", "missing. Fix: sudo pacman -S python-gobject")
+    elif in_appimage:
+        add(OK, "PyGObject", f"{found['PyGObject']} (built into the AppImage)")
     else:
         add(OK, "PyGObject", found["PyGObject"])
         add(OK if "GTK" in found else BAD, "GTK 4",
@@ -558,8 +569,12 @@ def health_check():
     else:
         add(WARN, "Screen", "no desktop found (fine over SSH; the window needs a desktop)")
 
+    bundled_fish = os.environ.get("ALIASMAKER_BUNDLED_FISH", "")
     fish = shutil.which("fish")
-    if fish:
+    if bundled_fish and os.access(bundled_fish, os.X_OK):
+        _code, out = _run([bundled_fish, "--version"])
+        add(OK, "fish shell", f"{out.split('version')[-1].strip()} (built into the AppImage)")
+    elif fish:
         _code, out = _run([fish, "--version"])
         add(OK, "fish shell", out.split("version")[-1].strip() or "installed")
     else:
