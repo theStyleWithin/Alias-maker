@@ -26,10 +26,10 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
-DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}
+DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"], "clippy_web": None}
 NEVER_MIND = {"nothing", "never mind", "nevermind", "cancel", "quit", "exit", "stop"}
 EMPTY_DATABASE = ("The database is empty. It fills up the first time you open the Alias Maker "
                   "terminal app.")
@@ -1021,7 +1021,11 @@ def fetch_text(url, timeout=8):
     context = ssl.create_default_context(cafile=cafile) if cafile else None
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
-        return response.read().decode("utf-8", errors="replace")
+        raw = response.read()
+    if raw[:2] == b"\x1f\x8b":  # gzip: the Stack Exchange API always sends it
+        import gzip
+        raw = gzip.decompress(raw)
+    return raw.decode("utf-8", errors="replace")
 
 
 def sitemap_urls(xml):
@@ -1105,10 +1109,45 @@ def source_index(source, quiet=False):
         return index, False
 
 
+# Words that don't say what the question is about: "I need help", "something is wrong"
+VAGUE_WORDS = {"need", "want", "problem", "problems", "issue", "issues", "question", "questions",
+               "stuff", "thing", "things", "something", "anything", "everything", "wrong",
+               "broken", "trouble", "fix", "work", "works", "working", "linux", "computer", "pc",
+               "terminal", "command", "commands", "hi", "hello", "hey", "clippy", "ok", "okay",
+               "have", "has", "got", "just", "really", "very", "some", "there", "here", "not"}
+
+
 def meaningful_words(query):
     words = [w for w in re.findall(r"[a-z0-9][a-z0-9+._-]*", query.lower())]
+    specific = [w for w in words if w not in STOP_WORDS and w not in VAGUE_WORDS and len(w) > 1]
     kept = [w for w in words if w not in STOP_WORDS]
-    return kept or words
+    return specific or kept or words
+
+
+def has_substance(query):
+    """Whether there's something specific to look up, not just "I need help"."""
+    words = re.findall(r"[a-z0-9][a-z0-9+._-]*", query.lower())
+    return any(len(w) > 1 and w not in STOP_WORDS and w not in VAGUE_WORDS for w in words)
+
+
+def narrow_down(query):
+    """Ask what the person needs until there's something specific to look up.
+    Returns the question to search, or None if there isn't one."""
+    example = f"/{HELPER_NAME} wifi keeps dropping"
+    for _ in range(2):
+        if has_substance(query):
+            return query
+        if not interactive():
+            print(f"What do you need help with? Tell me a bit more, for example: {example}")
+            return None
+        answer = ask("What do you need help with? ")
+        if answer is None or not answer.strip():
+            return None
+        query = answer.strip() if has_substance(answer) else f"{query} {answer}".strip()
+    if has_substance(query):
+        return query
+    print(f"I still can't tell what to look up. Try a few more words, for example: {example}")
+    return None
 
 
 def score_text(words, *weighted_fields):
@@ -1157,6 +1196,102 @@ def search_mediawiki(api, query, limit=3):
         return []
 
 
+def search_stackexchange(source, query, limit=3):
+    """Questions that have answers, from a Stack Exchange site (Ask Ubuntu, Unix & Linux...), through
+    its free public search. [] if nothing, None if it couldn't be reached."""
+    import html
+    from urllib.parse import urlencode
+    topic = " ".join(meaningful_words(query))
+    api = source.get("api", "https://api.stackexchange.com/2.3").rstrip("/")
+    url = f"{api}/search/advanced?" + urlencode({"order": "desc", "sort": "relevance", "q": topic,
+                                                   "site": source["site"], "answers": 1,
+                                                   "pagesize": limit})
+    try:
+        items = json.loads(fetch_text(url, timeout=8)).get("items", [])
+    except (OSError, ValueError, AttributeError):
+        return None
+    found = []
+    for item in items[:limit]:
+        link = str(item.get("link", ""))
+        if not link.startswith("https://"):
+            continue  # only real web addresses, never anything else
+        answers = int(item.get("answer_count", 0) or 0)
+        found.append({"title": html.unescape(str(item.get("title", link))), "url": link,
+                      "description": f"{answers} answer{'s' if answers != 1 else ''}, "
+                                     f"score {int(item.get('score', 0) or 0)}"})
+    return found
+
+
+def default_sources():
+    """What /clippy uses when docs.json has no entry for this system (docs.json's "default")."""
+    path = find_docs_file()
+    data = read_json(path, {}) if path else {}
+    return (data.get("default") or {}).get("sources", [])
+
+
+def web_search_allowed(state):
+    """Whether /clippy may also search question-and-answer sites. Asks once, and only when someone
+    is there to answer: it sends their question to stackexchange.com."""
+    choice = state.settings.get("clippy_web")
+    if choice is None and interactive():
+        print("/clippy can also search question-and-answer sites (stackexchange.com: Ask Ubuntu,")
+        print("Unix & Linux). That sends your question to them. (Change it later with: doit clippy web off)")
+        answer = ask(f"Search there too? (type {yes_hint(state.settings)} for yes, anything else for no) ")
+        choice = is_yes(answer, state.settings)
+        state.settings["clippy_web"] = choice
+        save_settings(state.settings)
+        print()
+    return bool(choice)
+
+
+RESULTS_STYLE = """
+:root { --bg:#fafafa; --fg:#1d1d1f; --muted:#6b6b72; --link:#0b5fff; --card:#ffffff; --line:#e3e3e8; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#161618; --fg:#ececf0; --muted:#9a9aa3; --link:#7aa7ff; --card:#1f1f23; --line:#2e2e34; }
+}
+body { background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; margin:0; padding:24px 16px; }
+main { max-width:46rem; margin:0 auto; }
+h1 { font-size:1.4rem; margin:0 0 4px; } h2 { font-size:1.05rem; margin:24px 0 8px; }
+p.note { color:var(--muted); margin:0 0 8px; }
+ul { list-style:none; padding:0; margin:0; }
+li { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin:8px 0; }
+a { color:var(--link); font-weight:600; } span.d { color:var(--muted); } code { font-size:.95em; }
+"""
+
+
+def write_results_page(query, sections, manuals, offline):
+    """A small page of what /clippy found, to open in the browser. Everything shown is escaped and
+    only real web addresses become links."""
+    import html
+    esc = lambda text: html.escape(str(text), quote=True)  # noqa: E731
+    body = [f"<h1>{esc(APP)}'s /{HELPER_NAME}: {esc(query)}</h1>",
+            "<p class='note'>Here's what I found. I only looked things up: nothing was run. "
+            "Read them in your own time.</p>"]
+    if offline:
+        body.append("<p class='note'>Some sites couldn't be reached, so this list may be shorter than usual.</p>")
+    for section in sections:
+        body.append(f"<h2>{esc(section['name'])}</h2><ul>")
+        for page in section["items"]:
+            url = page["url"] if str(page["url"]).startswith(("https://", "http://")) else ""
+            title = f"<a href='{esc(url)}'>{esc(page['title'])}</a>" if url else esc(page["title"])
+            extra = f" <span class='d'>{esc(page['description'])}</span>" if page.get("description") else ""
+            body.append(f"<li>{title}{extra}</li>")
+        body.append("</ul>")
+    if manuals:
+        body.append("<h2>On this PC (manual pages)</h2><ul>")
+        for name, description in manuals:
+            body.append(f"<li><code>man {esc(name)}</code> <span class='d'>{esc(description)}</span></li>")
+        body.append("</ul>")
+    page = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            f"<title>{esc(APP)} /{HELPER_NAME}: {esc(query)}</title><style>{RESULTS_STYLE}</style></head>"
+            f"<body><main>{''.join(body)}</main></body></html>")
+    path = data_dir() / "clippy-results.html"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(page, encoding="utf-8")
+    return path
+
+
 def open_link(url):
     """Open a web page in the user's browser without tying up the terminal."""
     opener = os.environ.get("ALIASMAKER_OPENER") or shutil.which("xdg-open")
@@ -1169,24 +1304,34 @@ def open_link(url):
 
 
 def clippy(state, query):
-    """/clippy <topic>: show helpful links about a topic, from the documentation of the
-    operating system this PC runs. It never runs the command."""
+    """/clippy <topic>: a search helper. It looks in the documentation of the operating system this
+    PC runs (and, if allowed, question-and-answer sites), lists what it found, and opens a page of
+    results in the browser. If the question is too vague it asks what you need help with. It never
+    runs the command, and it isn't AI: it only shows real pages."""
     from urllib.parse import quote_plus
     query = query.strip()
-    if not query:
-        print(f"Tell me what you want to know about, for example: /{HELPER_NAME} chrooting")
+    if query.lower() in ("web on", "web off"):
+        state.settings["clippy_web"] = query.lower().endswith("on")
+        save_settings(state.settings)
+        print("Okay, /clippy will search question-and-answer sites too." if state.settings["clippy_web"]
+              else "Okay, /clippy will only use your system's own documentation and this PC.")
+        return 0
+    query = narrow_down(query)
+    if query is None:
         return 1
     print(f"/{HELPER_NAME}: Here's what I found about \"{query}\". "
           "(I'm only looking it up, not running anything.)\n")
     this_os = detect_os()
     system = docs_for_this_os(this_os)
     topic = " ".join(meaningful_words(query))
-    choices, offline, saved = [], False, False
+    choices, sections, offline, saved = [], [], False, False
 
     if system is None:
         print(f"I don't have a documentation source for {this_os['name']} yet, "
               "so I'll only look on this PC.\n")
-    for source in (system or {}).get("sources", []):
+    sources = list((system or {}).get("sources", [])) if system else default_sources()
+    web_on = web_search_allowed(state) if any(s.get("kind") == "stackexchange" for s in sources) else False
+    for source in sources:
         kind = source.get("kind")
         open_label = source.get("open_label", "Open the official page")
         if kind == "sitemap":
@@ -1196,6 +1341,11 @@ def clippy(state, query):
             pages = search_wiki(index["pages"], query) if index else []
         elif kind == "mediawiki":
             found = [] if offline else search_mediawiki(source["api"], query)
+            if found is None:
+                offline = True
+            pages = found or []
+        elif kind == "stackexchange":
+            found = [] if (offline or not web_on) else search_stackexchange(source, query)
             if found is None:
                 offline = True
             pages = found or []
@@ -1210,13 +1360,16 @@ def clippy(state, query):
             pages.append({"title": open_label, "description": "", "url": source["home"]})
         if not pages:
             continue
-        print(source["name"] + (f" ({source['note']})" if source.get("note") else ""))
+        heading = source["name"] + (f" ({source['note']})" if source.get("note") else "")
+        print(heading)
+        sections.append({"name": heading, "items": pages})
         for page in pages:
             choices.append(("link", page["url"]))
             line = page["title"] + (f" - {page['description']}" if page["description"] else "")
             print(f"  {len(choices)}) {line}\n     {page['url']}")
         print()
 
+    manuals = []
     library = state.library()
     if library and library.get("programs"):
         words = meaningful_words(query)
@@ -1226,6 +1379,7 @@ def clippy(state, query):
             print("On this PC (manual pages, work without internet)")
             for program in local:
                 choices.append(("manual", program["name"]))
+                manuals.append((program["name"], program["description"]))
                 print(f"  {len(choices)}) {program['name']} - {program['description']}"
                       f"   (manual: man {program['name']})")
             print()
@@ -1239,11 +1393,21 @@ def clippy(state, query):
         return 1
     if not interactive():
         return 0
-    number = ask(f"Open one? Type a number 1-{len(choices)} (Enter to skip): ")
-    number = (number or "").strip()
-    if not number.isdigit() or not 1 <= int(number) <= len(choices):
+    number = ask(f"Press Enter to see it all in your browser, or type a number 1-{len(choices)} "
+                 "to open just one (n to skip): ")
+    answer = (number or "").strip().lower()
+    if number is None or answer in ("n", "no", "skip"):
         return 0
-    kind, target = choices[int(number) - 1]
+    if answer == "":
+        page = write_results_page(query, sections, manuals, offline)
+        if state.dry_run:
+            print(f"[dry run] Would open: {page.as_uri()}")
+            return 0
+        print("Opening what I found in your browser. It's up to you to read it.")
+        return 0 if open_link(page.as_uri()) else 1
+    if not answer.isdigit() or not 1 <= int(answer) <= len(choices):
+        return 0
+    kind, target = choices[int(answer) - 1]
     if state.dry_run:
         print(f"[dry run] Would open: {'man ' + target if kind == 'manual' else target}")
         return 0

@@ -779,8 +779,8 @@ class TestClippy(DoitTestCase):
         self.assertEqual(list(by_os)[:2], ["cachyos", "steamos"], "specific systems come first")
         for system in shipped["systems"]:
             for source in system["sources"]:
-                self.assertIn(source["kind"], ("sitemap", "mediawiki", "search", "link"))
-                needed = {"sitemap": "url", "mediawiki": "api", "search": "pattern", "link": "url"}[source["kind"]]
+                self.assertIn(source["kind"], ("sitemap", "mediawiki", "search", "link", "stackexchange"))
+                needed = {"sitemap": "url", "mediawiki": "api", "search": "pattern", "link": "url", "stackexchange": "site"}[source["kind"]]
                 self.assertTrue(source.get(needed), f"{source['id']} needs {needed}")
                 if source["kind"] == "search":
                     self.assertIn("{q}", source["pattern"])
@@ -817,7 +817,7 @@ class TestClippy(DoitTestCase):
         self.assertIn("Arch Wiki", out)
         self.assertIn("https://wiki.archlinux.org/title/Chroot", out)
         self.assertIn("not running anything", out)
-        self.assertTrue(prompts[-1].startswith("Open one?"))
+        self.assertTrue(prompts[-1].startswith("Press Enter to see it all in your browser"))
         self.assertFalse(self.ran_chroot.exists())  # looked up, never run
 
     def test_picking_a_link_opens_it_in_the_browser(self):
@@ -878,7 +878,8 @@ class TestClippy(DoitTestCase):
     def test_needs_a_topic(self):
         code, out, _ = self.run_doit(["/clippy"], tty=False)
         self.assertEqual(code, 1)
-        self.assertIn("/clippy chrooting", out)
+        self.assertIn("What do you need help with?", out)
+        self.assertIn("/clippy wifi keeps dropping", out)
 
     def test_clippy_is_one_of_alias_makers_own_words(self):
         self.assertEqual(doit.phrase_problem("clippy stuff", {})[0], "reserved")
@@ -890,6 +891,179 @@ class TestClippy(DoitTestCase):
         self.assertIn("update", doit.expand_word("updated"))
         self.assertEqual(doit.expand_word("speed"), {"speed"})
 
+
+
+class FakeStackExchange:
+    """A stand-in for the Stack Exchange API: always gzip, like the real one. Remembers what was asked."""
+
+    def __init__(self):
+        import gzip
+        self.asked = []
+        self.items = [
+            {"title": "How do I fix wifi dropping &amp; reconnecting?", "link": "https://askubuntu.com/q/1", "answer_count": 4, "score": 12},
+            {"title": "Sneaky link", "link": "javascript:alert(1)", "answer_count": 1, "score": 1},
+            {"title": "<script>alert(2)</script> one", "link": "https://askubuntu.com/q/2", "answer_count": 1, "score": 0},
+        ]
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                outer.asked.append(self.path)
+                body = gzip.compress(json.dumps({"items": outer.items}).encode())
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class TestClippySearchHelper(DoitTestCase):
+    """/clippy asks what you need when it's vague, narrows it, and opens a page of what it found."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["no_proxy"] = os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+        self.se = FakeStackExchange()
+        source = {"id": "askubuntu", "name": "Ask Ubuntu", "kind": "stackexchange", "site": "askubuntu",
+                  "api": self.se.base}
+        link = {"id": "docs", "name": "Ubuntu documentation", "kind": "link", "url": "https://docs.example.test/ubuntu/"}
+        docs = {"systems": [{"os": ["ubuntu"], "name": "Ubuntu", "sources": [link, source]}],
+                "default": {"name": "Linux", "sources": [dict(source, id="unix", name="Unix & Linux Q&A", site="unix")]}}
+        (self.home / "docs.json").write_text(json.dumps(docs))
+        os.environ["ALIASMAKER_DOCS"] = str(self.home / "docs.json")
+        release = self.home / "os-release"
+        release.write_text('ID=ubuntu\nID_LIKE="debian"\nPRETTY_NAME="Ubuntu test"\n')
+        os.environ["ALIASMAKER_OS_RELEASE"] = str(release)
+        self.opened = self.home / "opened.txt"
+        os.environ["ALIASMAKER_OPENER"] = str(make_program(self.programs, "fake-opener", f'printf "%s" "$1" > "{self.opened}"'))
+
+    def tearDown(self):
+        os.environ.pop("ALIASMAKER_OPENER", None)
+        self.se.stop()
+        super().tearDown()
+
+    def wait_opened(self):
+        for _ in range(50):
+            if self.opened.exists():
+                break
+            time.sleep(0.05)
+        return self.opened.read_text() if self.opened.exists() else None
+
+    def test_a_vague_ask_gets_what_do_you_need_help_with(self):
+        code, out, prompts = self.run_doit(["/clippy", "I", "need", "help"], answers=["wifi keeps dropping", "n", "n"])
+        self.assertEqual(prompts[0], "What do you need help with? ")
+        self.assertIn('about "wifi keeps dropping"', out)
+
+    def test_a_vague_answer_is_asked_again_then_gives_up(self):
+        code, out, prompts = self.run_doit(["/clippy", "help"], answers=["stuff", "something"])
+        self.assertEqual(code, 1)
+        self.assertEqual(prompts, ["What do you need help with? "] * 2)
+        self.assertIn("I still can't tell what to look up", out)
+
+    def test_an_empty_answer_stops(self):
+        code, _, prompts = self.run_doit(["/clippy"], answers=[""])
+        self.assertEqual(code, 1)
+        self.assertEqual(len(prompts), 1)
+
+    def test_specific_questions_are_not_interrupted(self):
+        _, _, prompts = self.run_doit(["/clippy", "wifi", "keeps", "dropping"], answers=["no", "n"])
+        self.assertNotIn("What do you need help with? ", prompts)
+
+    def test_nothing_is_sent_until_the_user_says_yes(self):
+        code, out, prompts = self.run_doit(["/clippy", "wifi", "dropping"], answers=["no", "n"])
+        self.assertEqual(self.se.asked, [])
+        self.assertIn("sends your question", out)
+        self.assertIs(self.settings()["clippy_web"], False)
+        self.assertNotIn("answers, score", out)
+        self.run_doit(["/clippy", "wifi", "dropping"], answers=["n"])
+        self.assertEqual(self.se.asked, [])  # and it doesn't ask again
+
+    def test_saying_yes_searches_and_remembers(self):
+        _, out, _ = self.run_doit(["/clippy", "wifi", "dropping"], answers=["yes", "n"])
+        self.assertEqual(len(self.se.asked), 1)
+        self.assertIn("site=askubuntu", self.se.asked[0])
+        self.assertIn("wifi+dropping", self.se.asked[0])
+        self.assertIn("How do I fix wifi dropping & reconnecting? - 4 answers, score 12", out)
+        self.assertNotIn("javascript:", out)
+        self.assertIs(self.settings()["clippy_web"], True)
+        self.run_doit(["/clippy", "wifi", "dropping"], answers=["n"])
+        self.assertEqual(len(self.se.asked), 2)
+
+    def test_web_off_and_on(self):
+        self.run_doit(["clippy", "web", "on"])
+        self.assertIs(self.settings()["clippy_web"], True)
+        self.run_doit(["clippy", "web", "off"])
+        self.assertIs(self.settings()["clippy_web"], False)
+        self.run_doit(["/clippy", "wifi", "dropping"], answers=["n"])
+        self.assertEqual(self.se.asked, [])
+
+    def test_never_asks_for_consent_when_nobody_is_there(self):
+        code, out, _ = self.run_doit(["clippy", "wifi", "dropping"], tty=False)
+        self.assertEqual(self.se.asked, [])
+        self.assertNotIn("Search there too?", out)
+
+    def test_enter_opens_a_results_page_in_the_browser(self):
+        self.run_doit(["clippy", "web", "on"])
+        code, out, _ = self.run_doit(["/clippy", "wifi", "dropping"], answers=[""])
+        self.assertEqual(code, 0)
+        opened = self.wait_opened()
+        page = doit.data_dir() / "clippy-results.html"
+        self.assertEqual(opened, page.as_uri())
+        html = page.read_text(encoding="utf-8")
+        self.assertIn("href='https://askubuntu.com/q/1'", html)
+        self.assertIn("href='https://docs.example.test/ubuntu/'", html)
+        self.assertIn("nothing was run", html)
+
+    def test_the_results_page_escapes_everything_and_only_links_web_addresses(self):
+        page = doit.write_results_page(
+            "<b>x</b>", [{"name": "S<1>", "items": [
+                {"title": "<script>alert(1)</script>", "url": "javascript:alert(1)", "description": "a & b"},
+                {"title": "ok", "url": "https://example.test/?a=1&b='2'", "description": ""}]}],
+            [("ls<", "list <things>")], offline=True)
+        html = page.read_text(encoding="utf-8")
+        self.assertNotIn("<script>alert", html)
+        self.assertNotIn("<b>x</b>", html)
+        self.assertNotIn("href='javascript", html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        self.assertIn("href='https://example.test/?a=1&amp;b=&#x27;2&#x27;'", html)
+        self.assertIn("couldn't be reached", html)
+
+    def test_a_number_opens_just_that_page(self):
+        self.run_doit(["clippy", "web", "on"])
+        self.run_doit(["/clippy", "wifi", "dropping"], answers=["2"])
+        self.assertEqual(self.wait_opened(), "https://askubuntu.com/q/1")
+
+    def test_dry_run_opens_nothing(self):
+        self.run_doit(["clippy", "web", "on"])
+        code, out, _ = self.run_doit(["--dry-run", "/clippy", "wifi", "dropping"], answers=[""])
+        self.assertIn("[dry run] Would open: file://", out)
+        self.assertFalse(self.opened.exists())
+
+    def test_unreachable_stack_exchange_is_just_offline(self):
+        self.run_doit(["clippy", "web", "on"])
+        self.se.stop()
+        code, out, _ = self.run_doit(["clippy", "wifi", "dropping"], tty=False)
+        self.assertIn("docs.example.test/ubuntu", out)  # the system's own link is still there
+        self.assertIn("seem to be offline", out)
+        self.se = FakeStackExchange()
+
+    def test_a_system_without_an_entry_uses_the_default_sources(self):
+        release = self.home / "os-release"
+        release.write_text('ID=plan9\nPRETTY_NAME="plan9 test"\n')
+        self.run_doit(["clippy", "web", "on"])
+        _, out, _ = self.run_doit(["clippy", "wifi", "dropping"], tty=False)
+        self.assertIn("site=unix", self.se.asked[-1])
+        self.assertIn("Unix & Linux Q&A", out)
 
 
 class TestRealTerminalCommands(DoitTestCase):
