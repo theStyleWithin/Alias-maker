@@ -24,7 +24,7 @@ Report a Problem     crash reports and a health check (Alias Maker Debug)
 
 ![The ☰ menu with Custom Commands open to the side](docs/mockups/menu.png)
 
-- **Database:** every program installed on your PC in a spreadsheet-style table (Command, What it does, Package, Location), searchable by what it does ("drives", "wifi", "battery"), with the best match on top (search "drives" and `lsblk` comes first). Click a column title to sort by it. Alias Maker scans your installed software the first time it opens, and again by itself whenever you install or remove something, so it only ever lists commands that work on your PC. It also checks which system you're on (CachyOS, SteamOS, Arch, Ubuntu, Debian, Fedora…) and reads package details the way that system keeps them: pacman on Arch-based systems, dpkg on Ubuntu and Debian. Pick a program to read its manual, type it into the terminal, or make a custom command for it. It opens in its own window, the table builds up row by row, and it's read-only.
+- **Database:** every program installed on your PC in a spreadsheet-style table (Command, What it does, Package, Location), searchable by what it does ("drives", "wifi", "battery"), with the best match on top (search "drives" and `lsblk` comes first). Click a column title to sort by it. Alias Maker scans your installed software the first time it opens, and again by itself whenever you install or remove something, so it only ever lists commands that work on your PC. It also checks which system you're on (CachyOS, SteamOS, Arch, Ubuntu, Debian, Fedora…) and reads package details the way that system keeps them: pacman on Arch-based systems, dpkg on Ubuntu and Debian. It finds out which shell your PC uses (bash or fish) and lists that shell's own commands too (`cd`, `export`, `alias`…, marked as built into bash), because those are commands your PC understands even though they aren't programs. Pick a program to read its manual, type it into the terminal, or make a custom command for it. It opens in its own window, the table builds up row by row, and it's read-only.
 
   ![The Database window searching "drives", with lsblk first](docs/mockups/database.png)
 
@@ -46,7 +46,7 @@ Report a Problem     crash reports and a health check (Alias Maker Debug)
 
 ![Delete Command: only the alias is deleted](docs/mockups/delete-command.png)
 
-**It's yours, so it says so:** where other terminals show `fish ~`, Alias Maker says **Let'sdostuff~**, both in the title and on the line where you type:
+**It's yours, so it says so:** where other terminals show `fish ~` or `[deck@steamdeck ~]$`, Alias Maker says **Let'sdostuff~**, both in the title and on the line where you type. It only paints that name over your prompt: underneath it's still your PC's own shell (fish on CachyOS, bash on SteamOS and Ubuntu), and your own settings, aliases and commands work as usual:
 
 ```
 Let'sdostuff~ ❯
@@ -57,7 +57,7 @@ Every Alias Maker window opens with a big DOIT and your PC's info next to it (fr
 
 ![A new Alias Maker window: DOIT, the PC's info (Terminal: aliasmaker) and the Let'sdostuff~ prompt](docs/mockups/welcome.png)
 
-The folder after it still tells you where you are (`~` is your home folder), and the ❯ turns red when the last command failed. It's still the same fish underneath, with all your settings, and only inside Alias Maker.
+The folder after it still tells you where you are (`~` is your home folder), and the ❯ turns red when the last command failed. It's still the same shell underneath (your fish or bash, with all your settings), and the name is only painted on inside Alias Maker: other terminals stay as they were. To keep your own prompt, set `ALIASMAKER_KEEP_PROMPT=1`.
 
 **/clippy, the helper:** type `/clippy` and what you're wondering about, and it looks it up instead of running anything. As soon as you press space, `/clippy` turns into `doit clippy` (so it's never shown in red as an unknown command):
 
@@ -90,10 +90,10 @@ To uninstall: `bash alias-maker-installer.run --uninstall`, or `sudo pacman -R a
 
 - **Ready-made package** for CachyOS / Arch: `sudo pacman -U ~/Downloads/alias-maker-<version>-1-any.pkg.tar.zst`
 - **AUR / Flathub:** not published by the author; if someone packages it there, it'll be under their name (see [Publishing](#publishing)).
-- **AppImage (recommended on SteamOS and anything that isn't CachyOS):** [Alias-Maker-x86_64.AppImage](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/Alias-Maker-x86_64.AppImage). Nothing to install, nothing to ask: it carries its own Python, GTK 4, VTE and fish, and opens straight to the terminal. Make it runnable (right-click → Properties → Allow executing, or `chmod +x`), then double-click it. It needs a 64-bit PC with a graphical desktop and a C library of glibc 2.38 or newer (that's any 2024 distro, such as Ubuntu 24.04, Fedora 39 and newer, and a current SteamOS). The window uses the AppImage's own fish when your login shell isn't fish (bash on SteamOS and Ubuntu), so the `Let'sdostuff~` prompt, `/clippy` and one-word commands work everywhere; set `ALIASMAKER_SHELL=/bin/bash` to use another shell. One-word commands you make in it keep working in other terminals as long as the AppImage file stays where it is.
+- **AppImage (recommended on SteamOS and anything that isn't CachyOS):** [Alias-Maker-x86_64.AppImage](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/Alias-Maker-x86_64.AppImage). Nothing to install, nothing to ask: it carries its own Python, GTK 4 and VTE, and opens straight to the terminal. Make it runnable (right-click → Properties → Allow executing, or `chmod +x`), then double-click it. It needs a 64-bit PC with a graphical desktop and a C library of glibc 2.38 or newer (that's any 2024 distro, such as Ubuntu 24.04, Fedora 39 and newer, and a current SteamOS). The terminal runs the shell your PC already uses (bash on SteamOS and Ubuntu, fish on CachyOS), found when it starts; `ALIASMAKER_SHELL=/path/to/shell` picks another. One-word commands you make in it keep working in other terminals when your shell is fish; with bash they work in Alias Maker windows (other terminals know `doit <phrase>`), and the AppImage file has to stay where it is.
 - **Alias Maker Debug as an AppImage:** [Alias-Maker-Debug-x86_64.AppImage](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/Alias-Maker-Debug-x86_64.AppImage), the same self-contained build, opening Alias Maker Debug (crash reports and the health check) instead of the terminal.
 
-**Antivirus warnings about the AppImage.** A few antivirus engines (for example on VirusTotal) flag some AppImages: the small launcher at the front of every AppImage is a compressed, self-unpacking program, which looks like a packed virus to them, and this one also carries a lot of ready-made programs. Everything inside comes from known places: Ubuntu 24.04's own Python, GTK 4, VTE and their libraries (stripped, with their library search path changed so they find each other inside the AppImage), the official static build of fish 4.9.3 (checked against a pinned checksum when the AppImage is built), AppImage's official launcher, and Alias Maker's own files from this repo. To check that a download is the genuine one, built by GitHub from this repo's public source (each release has a `SHA256SUMS` file and a signed build record):
+**Antivirus warnings about the AppImage.** A few antivirus engines (for example on VirusTotal) flag some AppImages: the small launcher at the front of every AppImage is a compressed, self-unpacking program, which looks like a packed virus to them, and this one also carries a lot of ready-made programs. Everything inside comes from known places: Ubuntu 24.04's own Python, GTK 4, VTE and their libraries (stripped, with their library search path changed so they find each other inside the AppImage), AppImage's official launcher, and Alias Maker's own files from this repo. To check that a download is the genuine one, built by GitHub from this repo's public source (each release has a `SHA256SUMS` file and a signed build record):
 
 ```
 sha256sum -c SHA256SUMS --ignore-missing
@@ -123,7 +123,7 @@ To publish a version, change `VERSION` in `src/aliasmaker_core.py` on `main`. Th
 
 Nothing is started that you don't see in a process list with its name on it, and nothing pops up on its own:
 
-- **Opening the window:** one `aliasmaker` process (Python), and your shell (the AppImage's own fish, or yours) inside it. The AppImage itself shows up once as `Alias-Maker-x86_64.AppImage`, its launcher.
+- **Opening the window:** one `aliasmaker` process (Python), and your own shell (bash or fish) inside it. The AppImage itself shows up once as `Alias-Maker-x86_64.AppImage`, its launcher.
 - **While you use it:** `doit` starts for a moment each time you use it. The Database scan (when you first open it, and again after software is installed or removed) runs read-only helpers one after another for a second or two (`whatis`, and `pacman` or `dpkg-query`). It never runs the programs it lists.
 - **Only if you ask:** `xdg-open` for a `/clippy` result, `man` for a manual page, and the commands you made.
 - **Never:** pop-up dialogs, background services, or anything left running after you close the window. No network use except `/clippy`'s lookups on the CachyOS and Arch wikis, and only when you type `/clippy`.
@@ -136,7 +136,7 @@ Alias Maker is being tested, so it comes with **Alias Maker Debug**, a separate 
 
 - **Crash reports, made by themselves.** When Alias Maker crashes or hits an error, it saves a report: what went wrong, where in Alias Maker's code, the last few menu items used, and the PC's basics (Alias Maker version, OS, kernel, desktop, GTK and VTE versions). You don't type anything. Even sudden crashes (Alias Maker just vanishing) are caught: the next time it opens, it says so and the report is waiting. ☰ → Report a Problem shows how many reports are new.
 - **Private by design.** Reports never include anything typed or shown in the terminal. Before a report is saved, your user name, PC name, home folder, email addresses, IP addresses, passwords, long tokens and your own custom commands are replaced with `<user>`, `<pc>`, `~`, `<email>`, `<ip>`, `<hidden>` and `<your command>`. Reports stay on your PC (`~/.local/share/alias-maker/crashes/`), nothing is ever sent by itself, and you can read every word before sharing.
-- **Health check:** checks that everything Alias Maker needs is installed (Python, PyGObject, GTK 4, VTE, fish, fastfetch, manual pages) and that its files are readable, and says what to install to fix each problem.
+- **Health check:** checks that everything Alias Maker needs is installed (Python, PyGObject, GTK 4, VTE, your shell, fastfetch, manual pages) and that its files are readable, and says what to install to fix each problem.
 - **Sharing:** **Save Everything for the Developer** puts the health check and every report into one file in your Downloads folder, the one thing to send. Or Copy Report, Save Report, or **Report on GitHub** (opens a new issue with the report copied, ready to paste).
 - **Test the Crash Recorder** makes a harmless test report, to check that it all works.
 
@@ -162,7 +162,7 @@ Everything you type normally still works. `doit` runs the commands **you** make.
 
 ### Your commands are real terminal commands
 
-The old-fashioned way to make a shortcut on CachyOS is to edit fish's config file by hand and add lines like `alias update='…'`. Alias Maker does that part for you: it keeps its own file, `~/.config/fish/conf.d/alias-maker.fish`, and rewrites it every time you create, edit or delete a command. Fish loads it in every terminal window, Konsole included. Your own `config.fish` and CachyOS's settings are never touched, and you never need to open the file.
+The old-fashioned way to make a shortcut is to edit your shell's config file by hand and add lines like `alias update='…'`. Alias Maker does that part for you. For bash it keeps `~/.config/alias-maker/shortcuts.bash` (read by Alias Maker windows only, so your `.bashrc` is never touched). For fish it keeps its own file, `~/.config/fish/conf.d/alias-maker.fish`, and rewrites it every time you create, edit or delete a command. Fish loads it in every terminal window, Konsole included. Your own `config.fish` and CachyOS's settings are never touched, and you never need to open the file.
 
 One rule: **a terminal command can't have spaces.** The terminal reads the first word as the command, so `just check my fucking drives` would make it look for a program called `just`. When you name a command with spaces, Alias Maker offers one-word versions:
 
@@ -170,7 +170,7 @@ One rule: **a terminal command can't have spaces.** The terminal reads the first
 
 - **One-word names** (like `check-drives`) work on their own and with `doit` in front.
 - **Names with spaces** work with `doit` in front.
-- **Names that are already taken** (a program like `ls`, a fish command like `cd`, or one of CachyOS's shortcuts like `update`) work as `doit <name>` only, so the real one is never hidden.
+- **Names that are already taken** (a program like `ls`, a built-in like `cd`, or one of your own or CachyOS's shortcuts like `update`) work as `doit <name>` only, so the real one is never hidden.
 
 Shortcuts still go through Alias Maker: they show the real command first, ask before running when set to, and are logged. Extra words are passed along, so `check-drives /dev/sda` runs `lsblk -f /dev/sda`. In Alias Maker, a new one-word command works right away in every open window. Other terminals (like Konsole) pick it up in a new window.
 
