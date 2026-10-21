@@ -1,0 +1,63 @@
+# Flatpak manifest for Alias Maker @VERSION@: a starting point for a Flathub submission.
+# Read PORTING.md first: the app needs code changes to run its shell on the host.
+app-id: io.github.thestylewithin.AliasMaker
+runtime: org.gnome.Platform
+runtime-version: '49'  # check https://docs.flathub.org for the current GNOME runtime
+sdk: org.gnome.Sdk
+command: aliasmaker
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --share=ipc
+  - --share=network                     # /clippy looks things up on the CachyOS and Arch wikis
+  # A terminal for the real system: run the user's shell and commands on the host.
+  - --talk-name=org.freedesktop.Flatpak
+  # The Database lists programs installed on the host.
+  - --filesystem=host-os:ro
+  # Writes ~/.config/fish/conf.d/alias-maker.fish (the user's one-word commands), and opens
+  # the terminal in any folder.
+  - --filesystem=home
+modules:
+  # VTE for GTK 4 isn't in the GNOME runtime. If this doesn't build, copy the vte module from
+  # a Flathub terminal that already ships it (e.g. app.devsuite.Ptyxis) and match its version
+  # to the runtime. Flathub wants a commit next to the tag.
+  - name: vte
+    buildsystem: meson
+    config-opts:
+      - -Dgtk3=false
+      - -Dgtk4=true
+      - -Dgir=true
+      - -Dvapi=false
+      - -Ddocs=false
+      - -Dglade=false
+    sources:
+      - type: git
+        url: https://gitlab.gnome.org/GNOME/vte.git
+        tag: '0.80.0'
+
+  - name: alias-maker
+    buildsystem: simple
+    build-commands:
+      # Same layout as the Arch package: the app finds its files next to itself.
+      - install -Dm755 -t /app/lib/alias-maker/src src/aliasmaker src/doit src/aliasmaker-debug
+      - install -Dm644 -t /app/lib/alias-maker/src src/aliasmaker_core.py src/aliasmaker_crash.py
+      - install -Dm644 -t /app/lib/alias-maker/src/shell src/shell/lets-do-stuff.fish src/shell/doit-logo.txt
+      - install -Dm644 -t /app/lib/alias-maker/data data/examples.json
+      - install -dm755 /app/bin
+      - ln -s ../lib/alias-maker/src/aliasmaker /app/bin/aliasmaker
+      - ln -s ../lib/alias-maker/src/doit /app/bin/doit
+      - ln -s ../lib/alias-maker/src/aliasmaker-debug /app/bin/aliasmaker-debug
+      - install -Dm644 io.github.thestylewithin.AliasMaker.desktop -t /app/share/applications
+      - install -Dm644 io.github.thestylewithin.AliasMaker.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 alias-maker.svg /app/share/icons/hicolor/scalable/apps/io.github.thestylewithin.AliasMaker.svg
+    sources:
+      - type: archive
+        url: https://github.com/theStyleWithin/Alias-maker/releases/download/v@VERSION@/alias-maker-@VERSION@.tar.gz
+        sha256: '@SHA256@'
+      - type: file
+        path: io.github.thestylewithin.AliasMaker.desktop
+      - type: file
+        path: io.github.thestylewithin.AliasMaker.metainfo.xml
+      - type: file
+        path: alias-maker.svg

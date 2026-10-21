@@ -1,7 +1,7 @@
 # Publishes a release for every new version: when VERSION in src/aliasmaker_core.py changes
 # on main, this tests the code, builds every package and attaches them to a new release:
-# the installer, a pacman package, AppImages of the app and of Alias Maker Debug, and the
-# AUR files. If the AUR_SSH_PRIVATE_KEY secret is set, it also updates the AUR package.
+# the installer, a pacman package, AppImages of the app and of Alias Maker Debug, and hand-off
+# kits for whoever wants to publish it on the AUR or Flathub (see packaging/handoff/).
 name: Release
 
 on:
@@ -53,6 +53,7 @@ jobs:
         run: |
           packaging/build-installer.sh
           packaging/build-appimage.sh
+          packaging/build-handoff.sh
           cp "dist/alias-maker-${{ needs.check.outputs.version }}-installer.run" dist/alias-maker-installer.run
           rm dist/appimagetool
       - uses: actions/upload-artifact@v4
@@ -85,8 +86,6 @@ jobs:
   publish:
     needs: [check, build, arch]
     runs-on: ubuntu-24.04
-    env:
-      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -100,7 +99,8 @@ jobs:
       - name: Publish the release
         run: |
           v="${{ needs.check.outputs.version }}"
-          tar -czf dist/alias-maker-aur.tar.gz -C dist/aur PKGBUILD .SRCINFO
+          mv dist/aur dist/alias-maker-aur-handoff
+          tar -czf dist/alias-maker-aur-handoff.tar.gz -C dist alias-maker-aur-handoff
           cat > notes.md <<EOF
           Alias Maker $v for CachyOS. This is a test version: please report anything that goes wrong.
 
@@ -112,7 +112,7 @@ jobs:
           | \`alias-maker-$v-1-any.pkg.tar.zst\` | The ready-made CachyOS / Arch package: \`sudo pacman -U ~/Downloads/alias-maker-$v-1-any.pkg.tar.zst\` |
           | \`Alias-Maker-x86_64.AppImage\` | Nothing to install. Needs GTK 4 and VTE (CachyOS: \`sudo pacman -S vte4 python-gobject\`). Make it runnable (right-click → Properties → Allow executing, or \`chmod +x\`), then double-click it. |
           | \`Alias-Maker-Debug-x86_64.AppImage\` | Alias Maker Debug on its own, for when the app won't start. |
-          | \`alias-maker-aur.tar.gz\` | The AUR files (PKGBUILD and .SRCINFO). |
+          | \`alias-maker-aur-handoff.tar.gz\`, \`alias-maker-flathub-handoff.tar.gz\` | For packagers: Alias Maker isn't published on the AUR or Flathub by its author. Anyone is welcome to; these kits are a head start (read the README inside). |
 
           **If something goes wrong:** open **Alias Maker Debug** (from your app launcher, ☰ → Report a Problem, \`aliasmaker-debug\`, or the Debug AppImage), click **Save Everything for the Developer**, and send the file it makes. It never includes what you typed in the terminal, and you can read every word before sending it.
           EOF
@@ -120,27 +120,7 @@ jobs:
             "dist/alias-maker-$v-installer.run" dist/alias-maker-installer.run \
             dist/alias-maker-$v-*.pkg.tar.zst \
             dist/Alias-Maker-x86_64.AppImage dist/Alias-Maker-Debug-x86_64.AppImage \
-            "dist/alias-maker-$v.tar.gz" dist/alias-maker-aur.tar.gz \
+            "dist/alias-maker-$v.tar.gz" dist/alias-maker-aur-handoff.tar.gz dist/alias-maker-flathub-handoff.tar.gz \
             --target "$GITHUB_SHA" --title "Alias Maker $v" \
             --notes-file notes.md --generate-notes
 
-      - name: Update the AUR package
-        if: env.AUR_SSH_PRIVATE_KEY != ''
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
-          chmod 600 ~/.ssh/aur
-          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
-          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes"
-          git clone ssh://aur@aur.archlinux.org/alias-maker.git aur-repo
-          cp dist/aur/PKGBUILD dist/aur/.SRCINFO aur-repo/
-          cd aur-repo
-          git config user.name "theStyleWithin"
-          git config user.email "135564329+theStyleWithin@users.noreply.github.com"
-          git add PKGBUILD .SRCINFO
-          if git diff --cached --quiet; then
-            echo "The AUR package is already up to date."
-          else
-            git commit -m "Update to ${{ needs.check.outputs.version }}"
-            git push origin HEAD:master
-          fi

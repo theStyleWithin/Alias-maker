@@ -35,9 +35,9 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 |---|---|
 | Wrapper: plain-English phrases run real commands | Built (`src/doit`) |
 | Installer: one `.run` file that builds and installs a pacman package (`packaging/`) | Built; the package layout, the installed copy and the installer's steps were tested, but pacman and makepkg themselves only run on a real Arch/CachyOS PC |
-| Release workflow: every new version publishes the installer, a pacman package, AppImages (app and Debug) and AUR files | Built; the installer and AppImages are built and tested on Ubuntu 24.04 (the AppImage window, a one-word command made in it working from a fresh fish after it closed, and both AppImages without GTK); the pacman package and .SRCINFO are only built by the workflow's Arch container |
-| AUR package, updated by the release workflow | Built; waits for the `AUR_SSH_PRIVATE_KEY` secret |
-| Flatpak / Flathub | Not yet: a sandboxed terminal needs `flatpak-spawn --host` for the shell, the Database scan and doit |
+| Release workflow: every new version publishes the installer, a pacman package, AppImages (app and Debug) and AUR/Flathub hand-off kits | Built; the installer and AppImages are built and tested on Ubuntu 24.04 (the AppImage window, a one-word command made in it working from a fresh fish after it closed, and both AppImages without GTK); the pacman package and .SRCINFO are only built by the workflow's Arch container |
+| AUR hand-off kit (PKGBUILD, .SRCINFO, instructions) in every release | Built; the author won't publish it, a volunteer can |
+| Flathub hand-off kit (manifest, metainfo, desktop file, porting notes) in every release | Built, not build-tested; the app needs the code changes in PORTING.md to run in a Flatpak |
 | Six ready-made commands turned into examples (no built-in phrases) | Built |
 | One-word commands become real fish commands (Alias Maker's conf.d file), with naming help; they work at once in open Alias Maker windows | Built; the fish side tested with real fish 4.0 |
 | "Do what? I am waiting..." prompt | Built |
