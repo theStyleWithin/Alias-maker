@@ -40,12 +40,16 @@ else
     unset __aliasmaker_existing
 fi
 
-# /clippy <topic>: when you press Enter, /clippy turns into "doit clippy" (bash can't have a
-# command called /clippy). It looks a topic up and never runs it. This only touches Enter when
-# Enter does the ordinary thing (accept the line), so it never fights your own key settings.
+# /clippy <topic> and /ai: when you press Enter, /clippy turns into "doit clippy" and /ai into
+# "doit ai" (bash can't have a command called /clippy). /clippy looks a topic up and never runs
+# it; /ai opens the optional AI chat. This only touches Enter when Enter does the ordinary thing
+# (accept the line), so it never fights your own key settings.
 __aliasmaker_clippy() {
     if [[ "$READLINE_LINE" == "/clippy" || "$READLINE_LINE" == "/clippy "* ]]; then
         READLINE_LINE="doit clippy${READLINE_LINE#/clippy}"
+        READLINE_POINT=${#READLINE_LINE}
+    elif [[ "$READLINE_LINE" == "/ai" || "$READLINE_LINE" == "/ai "* ]]; then
+        READLINE_LINE="doit ai${READLINE_LINE#/ai}"
         READLINE_POINT=${#READLINE_LINE}
     fi
 }
