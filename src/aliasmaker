@@ -1511,8 +1511,8 @@ class AliasMakerApp(Gtk.Application):
         install_table_style()
         core.write_fish_shortcuts()  # make sure the real terminal commands match the saved ones
         self.new_window(self.workdir, self.command)
-        if not core.library_path().is_file():
-            self.scanner.start()  # first time Alias Maker takes over: fill the Database
+        if core.library_outdated():
+            self.scanner.start()  # first run, or software was installed or removed since the scan
 
     def new_window(self, workdir=None, command=None):
         crash.note("terminal window opened")
@@ -1545,6 +1545,8 @@ class AliasMakerApp(Gtk.Application):
         window.present()
         if not already_open:
             window.reload(animate=True)
+            if core.library_path().is_file() and core.library_outdated():
+                self.scanner.start()  # something was installed or removed: refresh the list
 
     def show_custom(self, parent, mode="list"):
         if self.custom_window is None:

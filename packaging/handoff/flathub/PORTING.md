@@ -21,15 +21,15 @@ Line numbers are for version @VERSION@.
    `--init-command` path and for the `PATH` set around line 589. They're plain Python and
    run with the host's `python3`.
 
-3. **One-word commands** (`src/aliasmaker_core.py`, `doit_command()` around line 347). The
+3. **One-word commands** (`src/aliasmaker_core.py`, `doit_command()` around line 371). The
    fish file must point at the host copy from step 2, not `/app/...`.
 
 4. **Running commands** (`run_entry()`, the `subprocess.run(..., shell=True)` around line
-   1507). This only runs on the host once steps 1–2 are done (doit then runs on the host).
+   1604). This only runs on the host once steps 1–2 are done (doit then runs on the host).
    Make sure no code path runs doit inside the sandbox.
 
-5. **The Database scan** (`scan_library()` around line 592, the PATH walk around line 513,
-   `whatis` around line 546, `pacman` around line 569). Run these with
+5. **The Database scan** (`scan_library()` around line 662, the PATH walk around line 537,
+   `whatis` around line 570, `pacman` around line 639; Ubuntu uses `dpkg_package_info()`). Run these with
    `flatpak-spawn --host`, or read programs from `/run/host/usr/bin`.
 
 6. **Alias Maker Debug's health check** (`src/aliasmaker_crash.py`, `health_check()`) checks

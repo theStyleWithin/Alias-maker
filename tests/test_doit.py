@@ -216,16 +216,50 @@ class TestLogging(PhraseTestCase):
 
 class TestShippedExamples(DoitTestCase):
     def test_examples_are_complete_and_none_run_by_themselves(self):
-        examples = doit.load_examples(ROOT / "data" / "examples.json")
-        self.assertEqual([e["phrase"] for e in examples],
-                         ["turn off", "restart", "disk space", "update my system",
-                          "take a snapshot", "install brave"])
+        examples = doit.load_examples(ROOT / "data" / "examples.json", every=True)
+        self.assertEqual(sorted({e["phrase"] for e in examples}),
+                         ["disk space", "install brave", "restart", "take a snapshot",
+                          "turn off", "update my apps", "update my system"])
+        self.assertEqual(len({e["id"] for e in examples}), len(examples))
         for example in examples:
             self.assertTrue({"id", "phrase", "command", "explanation", "confirm"} <= set(example))
             self.assertIsNone(doit.phrase_problem(doit.normalize(example["phrase"]), {})[0],
                               f"{example['phrase']} should be free for the user to take")
             if example.get("source_url") or "sudo" in example["command"].split():
                 self.assertTrue(example["confirm"], f"{example['id']} should ask first")
+
+    def os_release(self, text):
+        path = Path(self.tmp.name) / "os-release"
+        path.write_text(text)
+        os.environ["ALIASMAKER_OS_RELEASE"] = str(path)
+        self.addCleanup(os.environ.pop, "ALIASMAKER_OS_RELEASE", None)
+
+    def offered(self):
+        everything = Path(self.tmp.name) / "bin"
+        everything.mkdir(exist_ok=True)
+        for program in ("systemctl", "df", "pacman", "apt", "dnf", "flatpak", "snapper", "curl"):
+            (everything / program).write_text("#!/bin/sh\n")
+            (everything / program).chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": str(everything)}):
+            examples = doit.load_examples(ROOT / "data" / "examples.json")
+        return {e["phrase"]: e["command"] for e in examples}
+
+    def test_each_os_gets_its_own_update_command(self):
+        self.os_release('NAME="CachyOS Linux"\nID=cachyos\nID_LIKE=arch\n')
+        self.assertIn("cachyos-keyring", self.offered()["update my system"])
+        self.os_release('NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\nPRETTY_NAME="Ubuntu 24.04 LTS"\n')
+        self.assertEqual(doit.detect_os()["name"], "Ubuntu 24.04 LTS")
+        self.assertEqual(self.offered()["update my system"], "sudo apt update && sudo apt full-upgrade")
+        self.os_release('NAME="SteamOS"\nID=steamos\nID_LIKE=arch\n')
+        offered = self.offered()
+        self.assertNotIn("update my system", offered, "SteamOS is read-only: no pacman updates")
+        self.assertNotIn("install brave", offered)
+        self.assertEqual(offered["update my apps"], "flatpak update")
+
+    def test_examples_need_their_program(self):
+        self.os_release("ID=ubuntu\nID_LIKE=debian\n")
+        with mock.patch.dict(os.environ, {"PATH": str(Path(self.tmp.name))}):
+            self.assertEqual(doit.load_examples(ROOT / "data" / "examples.json"), [])
 
     def test_examples_are_not_commands(self):
         os.environ["DOIT_EXAMPLES"] = str(ROOT / "data" / "examples.json")
@@ -336,6 +370,40 @@ class TestScan(ScanTestCase):
         code, out, _ = self.run_doit(["create"], answers=["", "1", "mystery"])
         self.assertIn("The database is empty", out)
         self.assertFalse(doit.library_path().exists())
+
+    def test_installing_something_makes_the_database_out_of_date(self):
+        self.assertTrue(doit.library_outdated(), "no scan yet")
+        doit.scan_library()
+        self.assertFalse(doit.library_outdated())
+        os.utime(self.programs, (1, 1))  # what installing or removing a program does
+        self.assertTrue(doit.library_outdated())
+
+    def test_unknown_commands_are_explained(self):
+        doit.scan_library()
+        doit.save_custom_command("check my drives", "lsblk", False)
+        code, out, _ = self.run_doit(["--not-found", "check", "my", "drives"], tty=False)
+        self.assertEqual(code, 0)
+        self.assertIn("Put doit in front of it: doit check my drives", out)
+        code, out, _ = self.run_doit(["--not-found", "lsblkk"], tty=False)
+        self.assertEqual(code, 1)
+        self.assertIn('"lsblkk" isn\'t a program on this PC', out)
+        self.assertIn("similar name: lsblk", out)
+
+
+class TestScanOnUbuntu(DoitTestCase):
+    def test_packages_come_from_dpkg(self):
+        make_program(self.programs, "lsblk")
+        make_program(self.programs, "dpkg-query",
+                     "printf 'util-linux\\tmiscellaneous system utilities\\nother\\t\\n'")
+        info = Path(self.tmp.name) / "dpkg-info"
+        info.mkdir()
+        (info / "util-linux:amd64.list").write_text(f"/.\n{self.programs}/lsblk\n")
+        with mock.patch.object(doit, "DPKG_INFO", str(info)):
+            library = doit.scan_library()
+        self.assertEqual(library["package_tool"], "dpkg")
+        lsblk = next(p for p in library["programs"] if p["name"] == "lsblk")
+        self.assertEqual((lsblk["package"], lsblk["description"]),
+                         ("util-linux", "miscellaneous system utilities"))
 
 
 

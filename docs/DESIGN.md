@@ -61,7 +61,9 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Tester releases on GitHub (installer, source, checksums) | Built from 0.7.0 |
 | Tabs, split view, find, profiles | Not yet |
 | Plain-English explanation for every scanned program | Stretch goal |
-| Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
+| Automatic rescan when software is installed or removed | Built: the window compares each PATH folder's last-change time with the scan's, on start and when the Database opens |
+| OS detection (`/etc/os-release`): package details from pacman or dpkg, examples that fit the OS and the installed programs | Built; dpkg tested for real on Ubuntu 24.04 (1,375 of 1,516 programs got a package and description). No rpm (Fedora) package details yet |
+| Plain-words explanation for unknown commands (typo, not installed, own phrase without doit) | Built; tested in the window on Ubuntu with fish 3.7 |
 | Bare phrases without the `doit` prefix | Later, optional |
 
 Not yet tested on CachyOS. The window has been run for real on Ubuntu 24.04 (GTK 4.14, VTE 0.76, fish 3.7) on a virtual screen: it opens, shows the DOIT welcome and the Let'sdostuff~ prompt, runs `doit` phrases and one-word commands, turns `/clippy` into `doit clippy`, opens the ☰ menu and the Database window (search "drives" puts `lsblk` first), and Alias Maker Debug saves a scrubbed report after a test crash. Editing table cells, Terminal Settings, the Command Log and the keyboard shortcuts weren't clicked through yet. The fish parts were also tested with real fish 4.0. There are 91 automated tests (78 for the engine, 13 for the crash recorder and Alias Maker Debug); the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (122 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
@@ -210,7 +212,9 @@ The first time the Alias Maker window opens (and on Rescan in the Database windo
 
 1. **Programs:** every runnable file in the folders listed in `PATH`.
 2. **Descriptions from manuals:** each program's one-line summary from its manual page, via `whatis` (sections 1, 8 and 6 only, so C library functions with the same name are skipped).
-3. **Fallback from pacman:** which package owns each program, and that package's description, for programs with no manual.
+3. **Fallback from the package manager:** which package owns each program, and that package's description, for programs with no manual. Alias Maker reads the OS from `/etc/os-release` (`detect_os()`: CachyOS and SteamOS report `ID_LIKE=arch`, Ubuntu `ID_LIKE=debian`) and uses pacman (`pacman -Ql`, `pacman -Qi`) or dpkg (the file lists in `/var/lib/dpkg/info`, and `dpkg-query` for descriptions).
+
+The scan also saves each PATH folder's last-change time. Installing or removing a program changes its folder's time, so `library_outdated()` can tell the Database is stale without a full scan; the window rescans in the background on start and when the Database opens.
 
 It only reads; it never runs the programs (asking each one for `--help` would mean launching thousands of programs). Without manual pages installed (`sudo pacman -S man-db man-pages`), descriptions come only from packages and are vaguer. The list is saved to `~/.local/share/alias-maker/library.json` and refreshed after Alias Maker's own installs.
 

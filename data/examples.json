@@ -1,6 +1,6 @@
 {
-  "_note": "Example commands a user can make. None of these run on their own: they're starting points offered in Create Command and doit create. Verify each against the book before relying on it.",
-  "version": "1.0",
+  "_note": "Example commands a user can make. None of these run on their own: they're starting points offered in Create Command and doit create. Only examples that suit the PC are offered: 'os' (any of these OS IDs, from /etc/os-release ID or ID_LIKE), 'not_os' (none of these) and 'needs' (programs that must be installed). Verify each against the book before relying on it.",
+  "version": "1.1",
   "examples": [
     {
       "id": "poweroff",
@@ -8,8 +8,7 @@
       "command": "systemctl poweroff",
       "explanation": "Shuts the computer down.",
       "confirm": false,
-      "source_url": null,
-      "warning": null
+      "needs": ["systemctl"]
     },
     {
       "id": "reboot",
@@ -17,8 +16,7 @@
       "command": "systemctl reboot",
       "explanation": "Restarts the computer.",
       "confirm": false,
-      "source_url": null,
-      "warning": null
+      "needs": ["systemctl"]
     },
     {
       "id": "disk-space",
@@ -26,17 +24,56 @@
       "command": "df -h",
       "explanation": "Shows how full each drive is, in sizes that are easy to read.",
       "confirm": false,
-      "source_url": null,
-      "warning": null
+      "needs": ["df"]
     },
     {
-      "id": "update-system",
+      "id": "update-system-cachyos",
       "phrase": "update my system",
       "command": "sudo pacman -Sy --needed archlinux-keyring cachyos-keyring && sudo pacman -Su",
       "explanation": "Refreshes the package signing keys first, then updates everything installed. Keys go stale on a system that hasn't updated in a while, and installs fail until they're refreshed.",
       "confirm": true,
-      "source_url": null,
-      "warning": "This updates your whole system, including the kernel. Take a snapshot first if you want an undo button."
+      "warning": "This updates your whole system, including the kernel. Take a snapshot first if you want an undo button.",
+      "os": ["cachyos"],
+      "needs": ["pacman"]
+    },
+    {
+      "id": "update-system-arch",
+      "phrase": "update my system",
+      "command": "sudo pacman -Sy --needed archlinux-keyring && sudo pacman -Su",
+      "explanation": "Refreshes the package signing keys first, then updates everything installed. Keys go stale on a system that hasn't updated in a while, and installs fail until they're refreshed.",
+      "confirm": true,
+      "warning": "This updates your whole system, including the kernel. Take a snapshot first if you want an undo button.",
+      "os": ["arch"],
+      "not_os": ["cachyos", "steamos"],
+      "needs": ["pacman"]
+    },
+    {
+      "id": "update-system-debian",
+      "phrase": "update my system",
+      "command": "sudo apt update && sudo apt full-upgrade",
+      "explanation": "Checks for new versions of everything installed, then updates it all.",
+      "confirm": true,
+      "warning": "This updates your whole system, including the kernel. It asks once more before installing.",
+      "os": ["debian", "ubuntu"],
+      "needs": ["apt"]
+    },
+    {
+      "id": "update-system-fedora",
+      "phrase": "update my system",
+      "command": "sudo dnf upgrade --refresh",
+      "explanation": "Checks for new versions of everything installed, then updates it all.",
+      "confirm": true,
+      "warning": "This updates your whole system, including the kernel. It asks once more before installing.",
+      "os": ["fedora"],
+      "needs": ["dnf"]
+    },
+    {
+      "id": "update-apps-flatpak",
+      "phrase": "update my apps",
+      "command": "flatpak update",
+      "explanation": "Updates the apps you installed from Flathub or Discover's Flatpak section. On SteamOS, this is how desktop apps get updated (SteamOS itself updates from Steam's Settings).",
+      "confirm": true,
+      "needs": ["flatpak"]
     },
     {
       "id": "snapshot",
@@ -44,8 +81,20 @@
       "command": "sudo snapper create --description \"alias maker snapshot\"",
       "explanation": "Saves a restore point you can roll back to if something breaks.",
       "confirm": true,
-      "source_url": null,
-      "warning": "Only works if snapper is set up on this computer. If it isn't, this will fail with an error about a missing config."
+      "warning": "Only works if snapper is set up on this computer. If it isn't, this will fail with an error about a missing config.",
+      "needs": ["snapper"]
+    },
+    {
+      "id": "install-brave-arch",
+      "phrase": "install brave",
+      "command": "curl -fsS https://dl.brave.com/install.sh | sh",
+      "explanation": "Installs the Brave browser using the installation command from Brave's own guide.",
+      "confirm": true,
+      "source_url": "https://dl.brave.com/install.sh",
+      "warning": "If Brave isn't in your regular repos, Brave's installer uses an AUR helper (paru, pikaur or yay) and installs from the AUR without asking again. It also refreshes your package list.",
+      "os": ["arch"],
+      "not_os": ["steamos"],
+      "needs": ["curl"]
     },
     {
       "id": "install-brave",
@@ -54,7 +103,9 @@
       "explanation": "Installs the Brave browser using the installation command from Brave's own guide.",
       "confirm": true,
       "source_url": "https://dl.brave.com/install.sh",
-      "warning": "If Brave isn't in your regular repos, Brave's installer uses an AUR helper (paru, pikaur or yay) and installs from the AUR without asking again. It also refreshes your package list."
+      "warning": "Brave's installer adds Brave's own package source to your system, then installs Brave from it.",
+      "os": ["debian", "ubuntu", "fedora"],
+      "needs": ["curl"]
     }
   ]
 }

@@ -22,6 +22,7 @@ Current goal: get it working and usable on a real CachyOS PC. Prefer fixing and 
 - The author won't publish on the AUR or Flathub (doesn't want to deal with their moderation). Don't set up publishing there; keep `packaging/handoff/` usable by volunteer packagers instead.
 - AppImages use the host's Python/GTK 4/VTE (nothing bundled). From an AppImage, one-word fish commands call `$APPIMAGE doit` (`doit_command()`), since the AppImage's own folder vanishes when it closes.
 - Flatpak: `packaging/handoff/flathub/PORTING.md` lists the code changes (`flatpak-spawn --host` for the shell, the scan and doit). Update its line numbers if those functions move.
+- Cross-OS: `detect_os()` reads `/etc/os-release`; the scan uses pacman or dpkg (`package_tool()`); examples carry `os`/`not_os`/`needs` and only fitting ones are offered; the window rescans when a PATH folder's mtime changes (`library_outdated()`). No rpm support yet. Outside fish (e.g. bash on Ubuntu) there's no Let'sdostuff~ prompt, /clippy or one-word commands.
 - Known gaps: commands run through `sh` (`subprocess.run(..., shell=True)`), not fish, so fish aliases/syntax fail; the forced "ask first" check only looks for the word `sudo` (misses `doas`, `pkexec`, `run0`, `&&sudo`).
 
 ## Rules

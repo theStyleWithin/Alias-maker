@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "0.7.2"
+VERSION = "0.8.0"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}
@@ -199,17 +199,41 @@ def write_json(path, data):
     tmp.replace(path)
 
 
-def load_examples(path=None):
-    """Example commands a user can make. Nothing runs from these on its own."""
+def detect_os():
+    """This PC's OS, from /etc/os-release. "ids" holds its ID and the IDs it's based on:
+    CachyOS and SteamOS -> {"cachyos"/"steamos", "arch"}, Ubuntu -> {"ubuntu", "debian"}."""
+    text = read_text_file(os.environ.get("ALIASMAKER_OS_RELEASE", "/etc/os-release"))
+    fields = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*?)"?\s*$', text, re.M))
+    ids = {fields.get("ID", "").lower(), *fields.get("ID_LIKE", "").lower().split()} - {""}
+    return {"id": fields.get("ID", "linux").lower(), "ids": ids,
+            "name": fields.get("PRETTY_NAME") or fields.get("NAME") or "Linux"}
+
+
+def example_fits(example, this_os):
+    """Whether an example suits this PC: its OS ("os", "not_os") and the programs it needs."""
+    if example.get("os") and not set(example["os"]) & this_os["ids"]:
+        return False
+    if set(example.get("not_os", [])) & this_os["ids"]:
+        return False
+    return all(shutil.which(program) for program in example.get("needs", []))
+
+
+def load_examples(path=None, every=False):
+    """Example commands a user can make, only those that suit this PC (unless every=True).
+    Nothing runs from these on its own."""
     path = path or find_examples()
     if path is None:
         return []
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f).get("examples", [])
+            examples = json.load(f).get("examples", [])
     except (OSError, ValueError):
         print(f"Note: {APP}'s example commands couldn't be read.", file=sys.stderr)
         return []
+    if every:
+        return examples
+    this_os = detect_os()
+    return [example for example in examples if example_fits(example, this_os)]
 
 
 def load_settings():
@@ -560,10 +584,56 @@ def manual_descriptions(names):
     return {name: desc for name, (_, desc) in best.items()}
 
 
+def package_tool():
+    """The package manager whose records the scan can read: "pacman", "dpkg" or None."""
+    if shutil.which("pacman"):
+        return "pacman"
+    if shutil.which("dpkg-query") and os.path.isdir(DPKG_INFO):
+        return "dpkg"
+    return None
+
+
+DPKG_INFO = os.environ.get("ALIASMAKER_DPKG_INFO", "/var/lib/dpkg/info")
+
+
 def package_info(wanted_paths):
-    """Which package owns each program file, and each package's description, via pacman."""
-    if not shutil.which("pacman"):
-        return {}, {}
+    """Which package owns each program file, and each package's description."""
+    tool = package_tool()
+    if tool == "pacman":
+        return pacman_package_info(wanted_paths)
+    if tool == "dpkg":
+        return dpkg_package_info(wanted_paths)
+    return {}, {}
+
+
+def dpkg_package_info(wanted_paths):
+    """Ubuntu / Debian: owners from dpkg's file lists, descriptions from dpkg-query."""
+    owners, descriptions = {}, {}
+    for listing in Path(DPKG_INFO).glob("*.list"):
+        package = listing.stem.split(":")[0]
+        try:
+            lines = listing.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for path in lines:
+            # dpkg still lists some programs under /bin and /sbin, now links into /usr
+            for candidate in (path, "/usr" + path if path.startswith(("/bin/", "/sbin/")) else None):
+                if candidate in wanted_paths:
+                    owners.setdefault(candidate, package)
+    try:
+        result = subprocess.run(["dpkg-query", "-W", "-f", "${Package}\t${binary:Summary}\n"],
+                                capture_output=True, text=True, timeout=120, env=clean_env())
+        for line in result.stdout.splitlines():
+            package, _, summary = line.partition("\t")
+            if summary:
+                descriptions[package] = summary.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return owners, descriptions
+
+
+def pacman_package_info(wanted_paths):
+    """Arch, CachyOS and SteamOS: owners and descriptions via pacman."""
     owners, descriptions = {}, {}
     try:
         files = subprocess.run(["pacman", "-Ql"], capture_output=True, text=True,
@@ -606,14 +676,41 @@ def scan_library():
             description, source = "", "none"
         entries.append({"name": name, "path": path, "description": description,
                         "source": source, "package": package})
+    this_os = detect_os()
     library = {
         "scanned_at": datetime.now().isoformat(timespec="seconds"),
+        "os": {"id": this_os["id"], "name": this_os["name"]},
         "has_manuals": bool(shutil.which("whatis")),
         "has_pacman": bool(shutil.which("pacman")),
+        "package_tool": package_tool(),
+        "folders": program_folders(),
         "programs": entries,
     }
     write_json(library_path(), library)
     return library
+
+
+def program_folders():
+    """Each PATH folder and when it last changed. Installing or removing a program changes
+    its folder, so this tells whether the Database is out of date without a full scan."""
+    folders = {}
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        real = os.path.realpath(folder) if folder else ""
+        if real and real not in folders and os.path.isdir(real):
+            try:
+                folders[real] = os.stat(real).st_mtime
+            except OSError:
+                pass
+    return folders
+
+
+def library_outdated(library=None):
+    """True if there's no Database yet, or software was installed or removed since the scan."""
+    library = read_json(library_path(), None) if library is None else library
+    if not library or "folders" not in library:
+        return True
+    scanned = library["folders"]
+    return any(scanned.get(folder) != mtime for folder, mtime in program_folders().items())
 
 
 def word_forms(word):
@@ -1540,6 +1637,29 @@ def handle(text, state):
     return run_entry_flow(custom_entry(custom, state), norm, state)
 
 
+def explain_not_found(state, words):
+    """The shell couldn't find a command: say why in plain words.
+    Returns 0 if it was one of the user's own phrases typed without doit, 1 otherwise."""
+    if not words:
+        return 1
+    typed = " ".join(words)
+    if normalize(typed) in state.custom_map:
+        print(f'"{typed}" is one of your own commands. Put doit in front of it: doit {typed}')
+        return 0
+    name = words[0]
+    print(f'"{name}" isn\'t a program on this PC. It may be spelled differently, or be part of '
+          "software that isn't installed.")
+    names = [program["name"] for program in (state.library() or {}).get("programs", [])]
+    close = difflib.get_close_matches(name, names, n=3, cutoff=0.75)
+    if close:
+        print("Programs you have with a similar name: " + ", ".join(close))
+    if "steamos" in detect_os()["ids"]:
+        print("On SteamOS, add software with Discover (in desktop mode): the system itself is "
+              "read-only, so pacman installs don't last.")
+    print("To see everything you have: ☰ → Database in the Alias Maker window.")
+    return 1
+
+
 def run_shortcut(state, name, extra):
     """Run a one-word shortcut like doit would, with any extra words added to the command."""
     custom = state.custom_map.get(normalize(name))
@@ -1567,6 +1687,9 @@ def main(argv):
 
     migrate_old_dirs()
     state = State(load_examples(), load_settings(), dry_run)
+
+    if args and args[0] == "--not-found":  # from the window's fish_command_not_found
+        return explain_not_found(state, args[1:])
 
     if args and args[0] == "--alias":  # a one-word shortcut from Alias Maker's fish file
         return run_shortcut(state, args[1] if len(args) > 1 else "", args[3:] if args[2:3] == ["--"] else args[2:])
