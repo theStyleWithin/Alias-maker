@@ -1,6 +1,9 @@
 # Alias-maker
 a simplified terminal app. A terminal app that makes it easy for the most "clinically Linux challenged" person on the planet to use Linux and get the fucking job done!
 
+> [!WARNING]
+> **Install at your own risk.** Alias Maker has not been tested on a real machine yet. It's recommended that you install or run it in a virtual machine (for example CachyOS in GNOME Boxes, virt-manager or VirtualBox) until it has been.
+
 ## What it is
 
 > The pictures in this README are mockups drawn from the code, not screenshots: Alias Maker hasn't been run on a real PC yet. The PC details in them are made up. All of them are in [docs/mockups](docs/mockups/).
