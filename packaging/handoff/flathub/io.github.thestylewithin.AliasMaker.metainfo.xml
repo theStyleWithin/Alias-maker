@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.thestylewithin.AliasMaker</id>
+  <name>Alias Maker</name>
+  <summary>A terminal that makes Linux commands easy</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <developer id="io.github.thestylewithin">
+    <name>theStyleWithin</name>
+  </developer>
+  <description>
+    <p>Alias Maker is a terminal for people who have never used one. It runs your normal shell and adds a menu with:</p>
+    <ul>
+      <li>A searchable list of every program on your computer, described in plain words</li>
+      <li>Your own commands: give any command a name of your choice and run it with doit</li>
+      <li>A command log, so you can always see what ran</li>
+      <li>/clippy, which looks a topic up in wikis and manual pages instead of running anything</li>
+    </ul>
+    <p>It always shows the real command before running it, and deleting one of your commands never touches the program it points to.</p>
+  </description>
+  <launchable type="desktop-id">io.github.thestylewithin.AliasMaker.desktop</launchable>
+  <url type="homepage">https://github.com/theStyleWithin/Alias-maker</url>
+  <url type="bugtracker">https://github.com/theStyleWithin/Alias-maker/issues</url>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>aliasmaker</binary>
+    <binary>doit</binary>
+  </provides>
+  <screenshots>
+    <!-- Flathub needs real screenshots: take them from the running app. -->
+  </screenshots>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

@@ -18,9 +18,10 @@ Current goal: get it working and usable on a real CachyOS PC. Prefer fixing and 
 
 ## Status
 - The engine is tested. The window runs on Ubuntu 24.04 (GTK 4.14, VTE 0.76, fish 3.7) under Xvfb but hasn't been tried on CachyOS yet. To test the window in a sandbox: `apt-get install gir1.2-gtk-4.0 gir1.2-vte-3.91 fish xdotool`, run it with `python3.12` (the system PyGObject) and `GSK_RENDERER=cairo` under `xvfb-run`, and screenshot with `import -window root`.
-- Releases: bump `VERSION` in `src/aliasmaker_core.py`; on `main`, `.github/workflows/release.yml` tests, builds and publishes the installer, pacman package, AppImages (app + Debug) and AUR files, and pushes to the AUR when the `AUR_SSH_PRIVATE_KEY` secret exists. Don't commit built files.
+- Releases: bump `VERSION` in `src/aliasmaker_core.py`; on `main`, `.github/workflows/release.yml` tests, builds and publishes the installer, pacman package, AppImages (app + Debug) and the AUR/Flathub hand-off kits. Don't commit built files.
+- The author won't publish on the AUR or Flathub (doesn't want to deal with their moderation). Don't set up publishing there; keep `packaging/handoff/` usable by volunteer packagers instead.
 - AppImages use the host's Python/GTK 4/VTE (nothing bundled). From an AppImage, one-word fish commands call `$APPIMAGE doit` (`doit_command()`), since the AppImage's own folder vanishes when it closes.
-- Flatpak/Flathub isn't done: the sandbox would need `flatpak-spawn --host` for the shell, the scan and doit.
+- Flatpak: `packaging/handoff/flathub/PORTING.md` lists the code changes (`flatpak-spawn --host` for the shell, the scan and doit). Update its line numbers if those functions move.
 - Known gaps: commands run through `sh` (`subprocess.run(..., shell=True)`), not fish, so fish aliases/syntax fail; the forced "ask first" check only looks for the word `sudo` (misses `doas`, `pkexec`, `run0`, `&&sudo`).
 
 ## Rules
