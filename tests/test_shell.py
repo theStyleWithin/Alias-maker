@@ -88,8 +88,24 @@ class Bash:
                     break
         return text in self.seen
 
+    def wait_for_prompt(self, timeout=20):
+        """Wait until bash has drawn its prompt and is reading keys (typing sooner is type-ahead, which
+        the terminal handles differently)."""
+        end = time.time() + timeout
+        while time.time() < end:
+            if self.seen.endswith("\u276f\x1b[0m "):
+                return True
+            ready, _, _ = select.select([self.fd], [], [], 0.1)
+            if ready:
+                try:
+                    self.seen += os.read(self.fd, 4096).decode("utf-8", errors="replace")
+                except OSError:
+                    return False
+        return False
+
     def run(self, line, expect, timeout=20):
         """Type a line and wait for what it should print. Returns what came back."""
+        self.wait_for_prompt()
         start = len(self.seen)
         os.write(self.fd, (line + "\r").encode())
         self.wait_for_after(start, expect, timeout)
@@ -157,7 +173,6 @@ class TestBashSetup(DoitTestCase):
     def test_ai_is_a_slash_command_too(self):
         out = self.bash.run("/ai how do I unzip", "DOIT: ai how do I unzip")
         self.assertIn("DOIT: ai how do I unzip", out)
-        time.sleep(1)  # let the prompt come back before typing the next line
         self.assertIn("DOIT: ai", self.bash.run("/ai", "DOIT: ai"))
 
     def test_your_one_word_commands_work_even_one_made_while_the_prompt_waited(self):
