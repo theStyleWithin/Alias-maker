@@ -2,7 +2,7 @@
 a simplified terminal app. A terminal app that makes it easy for the most "clinically Linux challenged" person on the planet to use Linux and get the fucking job done!
 
 > [!WARNING]
-> **Install at your own risk.** Alias Maker has not been tested on a real machine yet. It's recommended that you install or run it in a virtual machine (for example CachyOS in GNOME Boxes, virt-manager or VirtualBox) until it has been.
+> **Early version: use at your own risk.** Alias Maker is new. So far it has been run on one real Steam Deck (SteamOS) and on clean Ubuntu test systems, and not yet on other PCs. If you'd rather be careful, try it in a virtual machine first. If something goes wrong, open **Alias Maker Debug** and send the report file it saves.
 
 ## What it is
 
