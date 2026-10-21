@@ -621,8 +621,17 @@ class TerminalWindow(Gtk.ApplicationWindow):
                 self.term.feed(core.welcome_text(inside=True).replace("\n", "\r\n").encode())
             except (TypeError, OSError):
                 pass
+        def started(_terminal, _pid, error, *_rest):
+            if error is None:
+                return
+            # Say why in plain words instead of leaving an empty terminal, and keep a report
+            message = getattr(error, "message", str(error))
+            self.term.feed(("\x1b[1;31mAlias Maker couldn't start the shell: %s\x1b[0m\r\n"
+                            "Open the \u2630 menu, then Report a Problem.\r\n" % message).replace("\n", "\r\n").encode())
+            crash.record_startup_problem(f"The shell couldn't start: {message}", " ".join(argv[:3]))
+
         args = [Vte.PtyFlags.DEFAULT, cwd, argv, envv, GLib.SpawnFlags.SEARCH_PATH,
-                None, None, -1, None, None, None]
+                None, None, -1, None, started, None]
         try:
             self.term.spawn_async(*args)
         except TypeError:

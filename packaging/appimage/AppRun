@@ -37,7 +37,7 @@ export GI_TYPELIB_PATH="$usr/lib/girepository-1.0"
 # One small file, rewritten each time, in the per-user runtime folder.
 cache_dir="${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}/alias-maker"
 [ -d "$cache_dir" ] || mkdir -p "$cache_dir" 2>/dev/null
-sed "s|@APPDIR@|$usr|g" "$usr/lib/gdk-pixbuf-2.0/loaders.cache.in" > "$cache_dir/pixbuf-loaders.cache" 2>/dev/null &&
+sed "s|@APPDIR@|$here|g" "$usr/lib/gdk-pixbuf-2.0/loaders.cache.in" > "$cache_dir/pixbuf-loaders.cache" 2>/dev/null &&
     export GDK_PIXBUF_MODULE_FILE="$cache_dir/pixbuf-loaders.cache"
 export GSETTINGS_SCHEMA_DIR="$usr/share/glib-2.0/schemas"
 export GIO_MODULE_DIR="$usr/lib/gio-modules"
