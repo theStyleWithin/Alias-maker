@@ -1,5 +1,5 @@
 {
-  "_note": "Which documentation /clippy points at, by operating system (the ID or ID_LIKE in /etc/os-release). The first entry whose 'os' matches wins, so a specific system comes before the family it is built on. Source kinds: 'sitemap' (a wiki's pages, searched here), 'mediawiki' (a MediaWiki site's own search: 'api'), 'search' ('pattern' with {q} for the topic, optional 'home' page) and any source can carry a 'home' front page and 'link' ('url'). Add a system or a source here; no code change is needed.",
+  "_note": "Which documentation /clippy points at, by operating system (the ID or ID_LIKE in /etc/os-release). The first entry whose 'os' matches wins, so a specific system comes before the family it is built on. Source kinds: 'sitemap' (a wiki's pages, searched here), 'mediawiki' (a MediaWiki site's own search: 'api'), 'search' ('pattern' with {q} for the topic, optional 'home' page) 'stackexchange' ('site': a Stack Exchange site such as askubuntu or unix; only searched after the user says yes), and any source can carry a 'home' front page and 'link' ('url'). Add a system or a source here; no code change is needed.",
   "systems": [
     {
       "os": [
@@ -20,6 +20,13 @@
           "kind": "mediawiki",
           "api": "https://wiki.archlinux.org/api.php",
           "note": "CachyOS is built on Arch Linux"
+        },
+        {
+          "id": "unix",
+          "name": "Unix & Linux Q&A",
+          "kind": "stackexchange",
+          "site": "unix",
+          "note": "questions people asked and answered, not official documentation"
         }
       ]
     },
@@ -43,6 +50,13 @@
           "kind": "mediawiki",
           "api": "https://wiki.archlinux.org/api.php",
           "note": "SteamOS is built on Arch Linux"
+        },
+        {
+          "id": "unix",
+          "name": "Unix & Linux Q&A",
+          "kind": "stackexchange",
+          "site": "unix",
+          "note": "questions people asked and answered, not official documentation"
         }
       ]
     },
@@ -65,6 +79,13 @@
           "kind": "link",
           "url": "https://docs.ubuntu.com/",
           "note": "Linux Mint is built on Ubuntu"
+        },
+        {
+          "id": "askubuntu",
+          "name": "Ask Ubuntu",
+          "kind": "stackexchange",
+          "site": "askubuntu",
+          "note": "questions people asked and answered, not official documentation"
         }
       ]
     },
@@ -79,6 +100,13 @@
           "name": "Ubuntu documentation",
           "kind": "link",
           "url": "https://docs.ubuntu.com/"
+        },
+        {
+          "id": "askubuntu",
+          "name": "Ask Ubuntu",
+          "kind": "stackexchange",
+          "site": "askubuntu",
+          "note": "questions people asked and answered, not official documentation"
         }
       ]
     },
@@ -101,6 +129,13 @@
           "kind": "mediawiki",
           "api": "https://wiki.archlinux.org/api.php",
           "note": "Manjaro is built on Arch Linux"
+        },
+        {
+          "id": "unix",
+          "name": "Unix & Linux Q&A",
+          "kind": "stackexchange",
+          "site": "unix",
+          "note": "questions people asked and answered, not official documentation"
         }
       ]
     },
@@ -115,8 +150,27 @@
           "name": "Arch Wiki",
           "kind": "mediawiki",
           "api": "https://wiki.archlinux.org/api.php"
+        },
+        {
+          "id": "unix",
+          "name": "Unix & Linux Q&A",
+          "kind": "stackexchange",
+          "site": "unix",
+          "note": "questions people asked and answered, not official documentation"
         }
       ]
     }
-  ]
+  ],
+  "default": {
+    "name": "Linux",
+    "sources": [
+      {
+        "id": "unix",
+        "name": "Unix & Linux Q&A",
+        "kind": "stackexchange",
+        "site": "unix",
+        "note": "questions people asked and answered, not official documentation"
+      }
+    ]
+  }
 }
