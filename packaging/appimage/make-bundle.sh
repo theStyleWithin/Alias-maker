@@ -11,7 +11,7 @@
 #   make-bundle.sh APPDIR
 #
 # Needs: python3-gi gir1.2-gtk-4.0 gir1.2-vte-3.91 librsvg2-common adwaita-icon-theme patchelf
-#        libglib2.0-bin libgdk-pixbuf2.0-bin libgtk-4-common binutils xz-utils curl
+#        libglib2.0-bin libgdk-pixbuf2.0-bin libgtk-4-common shared-mime-info binutils xz-utils curl
 set -euo pipefail
 
 dir="$(mkdir -p "$1" && realpath "$1")"
@@ -122,6 +122,13 @@ cp /usr/share/glib-2.0/schemas/org.gtk.gtk4.Settings.*.gschema.xml \
    /usr/share/glib-2.0/schemas/org.gtk.Settings.*.gschema.xml "$dir/usr/share/glib-2.0/schemas/" 2>/dev/null || true
 glib-compile-schemas "$dir/usr/share/glib-2.0/schemas"
 rm -f "$dir"/usr/share/glib-2.0/schemas/*.xml
+
+# the MIME database: GTK recognises its SVG icons through it, and a clean PC may not have one
+mkdir -p "$dir/usr/share/mime"
+for file in mime.cache globs2 magic aliases subclasses generic-icons icons XMLnamespaces treemagic types version; do
+    [[ -f /usr/share/mime/$file ]] && cp /usr/share/mime/$file "$dir/usr/share/mime/"
+done
+[[ -s "$dir/usr/share/mime/mime.cache" ]] || { echo "make-bundle: no MIME database (install shared-mime-info)" >&2; exit 1; }
 
 mkdir -p "$dir/usr/share/icons/Adwaita"
 cp /usr/share/icons/Adwaita/index.theme "$dir/usr/share/icons/Adwaita/"

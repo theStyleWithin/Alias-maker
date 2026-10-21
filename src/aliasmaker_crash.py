@@ -235,7 +235,7 @@ def graphics_env_fixes():
 # The AppImage's launcher (packaging/appimage/AppRun) points GTK, Python and friends at its
 # own copies. It remembers each variable as ALIASMAKER_ORIG_<NAME>, or ALIASMAKER_WAS_UNSET_<NAME>.
 BUNDLE_VARS = ("GI_TYPELIB_PATH", "GDK_PIXBUF_MODULE_FILE", "GSETTINGS_SCHEMA_DIR",
-               "GIO_MODULE_DIR", "XDG_DATA_DIRS", "SSL_CERT_FILE", "PYTHONNOUSERSITE")
+               "GIO_MODULE_DIR", "XDG_DATA_DIRS")
 
 
 def bundle_env_fixes():

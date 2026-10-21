@@ -16,6 +16,15 @@ case "$1" in
     python) shift; prog=python ;;   # for debugging: the AppImage's own Python, set up like the app's
 esac
 
+# For the window: its own fish, and a doit that works without Python on the PC
+export ALIASMAKER_BUNDLED_FISH="$usr/bin/fish"
+export ALIASMAKER_DOIT_DIR="$usr/lib/alias-maker/bin"
+
+# doit needs none of GTK's settings (and passes its environment on to your own commands)
+if [ "$prog" = doit ]; then
+    exec "$usr/bin/python3" -s "$app/doit" "$@"
+fi
+
 # The window gives the shell inside it back what these were before (see crash.bundle_env_fixes),
 # so programs you start from the terminal never see the AppImage's own settings.
 keep() {
@@ -27,12 +36,10 @@ keep() {
         export "ALIASMAKER_WAS_UNSET_$1=1"
     fi
 }
-for name in GI_TYPELIB_PATH GDK_PIXBUF_MODULE_FILE GSETTINGS_SCHEMA_DIR \
-            GIO_MODULE_DIR XDG_DATA_DIRS SSL_CERT_FILE PYTHONNOUSERSITE; do
+for name in GI_TYPELIB_PATH GDK_PIXBUF_MODULE_FILE GSETTINGS_SCHEMA_DIR GIO_MODULE_DIR XDG_DATA_DIRS; do
     keep "$name"
 done
 
-export PYTHONNOUSERSITE=1
 export GI_TYPELIB_PATH="$usr/lib/girepository-1.0"
 # GTK finds its image loaders (the SVG icons) through a list that needs this run's real path.
 # One small file, rewritten each time, in the per-user runtime folder.
@@ -44,19 +51,7 @@ export GSETTINGS_SCHEMA_DIR="$usr/share/glib-2.0/schemas"
 export GIO_MODULE_DIR="$usr/lib/gio-modules"
 export XDG_DATA_DIRS="$usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 
-# Python doesn't know where this PC keeps its trusted certificates (for /clippy's wiki lookups)
-if [ -z "$SSL_CERT_FILE" ]; then
-    for file in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt \
-                /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem; do
-        [ -r "$file" ] && { export SSL_CERT_FILE="$file"; break; }
-    done
-fi
-
-# For the window: its own fish, and a doit that works without Python on the PC
-export ALIASMAKER_BUNDLED_FISH="$usr/bin/fish"
-export ALIASMAKER_DOIT_DIR="$usr/lib/alias-maker/bin"
-
 if [ "$prog" = python ]; then
-    exec "$usr/bin/python3" "$@"
+    exec "$usr/bin/python3" -s "$@"
 fi
-exec "$usr/bin/python3" "$app/$prog" "$@"
+exec "$usr/bin/python3" -s "$app/$prog" "$@"

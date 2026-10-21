@@ -79,10 +79,10 @@ class TestAppImageEnvironment(CrashTestCase):
     def test_the_launchers_settings_are_undone_for_the_shell(self):
         env = {"ALIASMAKER_ORIG_XDG_DATA_DIRS": "/usr/share", "XDG_DATA_DIRS": "/app/usr/share:/usr/share",
                "ALIASMAKER_WAS_UNSET_GI_TYPELIB_PATH": "1", "GI_TYPELIB_PATH": "/app/typelibs",
-               "ALIASMAKER_ORIG_SSL_CERT_FILE": "", "SSL_CERT_FILE": "/etc/ssl/certs/ca.crt"}
+               "ALIASMAKER_ORIG_GSETTINGS_SCHEMA_DIR": "", "GSETTINGS_SCHEMA_DIR": "/app/schemas"}
         with mock.patch.dict(os.environ, env):
             restore, remove = crash.bundle_env_fixes()
-        self.assertEqual(restore, {"XDG_DATA_DIRS": "/usr/share", "SSL_CERT_FILE": ""})
+        self.assertEqual(restore, {"XDG_DATA_DIRS": "/usr/share", "GSETTINGS_SCHEMA_DIR": ""})
         self.assertEqual(remove, ["GI_TYPELIB_PATH"])
 
     def test_outside_an_appimage_there_is_nothing_to_undo(self):

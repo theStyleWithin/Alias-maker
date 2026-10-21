@@ -173,7 +173,7 @@ def report_problem_label():
 def open_debug_app():
     """Alias Maker Debug: crash reports and a health check, in its own window."""
     try:
-        subprocess.Popen([sys.executable, DEBUG_APP], start_new_session=True)
+        subprocess.Popen([sys.executable, "-s", DEBUG_APP], start_new_session=True)
     except OSError as err:
         print(f"Couldn't open Alias Maker Debug: {err}", file=sys.stderr)
 

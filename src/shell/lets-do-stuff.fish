@@ -26,6 +26,10 @@
 # The welcome when a terminal opens: a big DOIT with this PC's info next to it (from
 # fastfetch when it's installed, or Alias Maker's own when it isn't).
 set -g __aliasmaker_doit (status dirname)/../doit
+# From the AppImage, a doit that brings its own Python (the PC may have none)
+if set -q ALIASMAKER_DOIT_DIR; and test -x $ALIASMAKER_DOIT_DIR/doit
+    set -g __aliasmaker_doit $ALIASMAKER_DOIT_DIR/doit
+end
 
 # doit works here even if Alias Maker was never installed onto your PATH.
 if not command -q doit; and not functions -q doit

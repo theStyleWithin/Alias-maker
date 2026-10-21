@@ -842,11 +842,20 @@ def wiki_index_path():
     return data_dir() / "cachyos-wiki.json"
 
 
+# Where Arch, Debian, Fedora and openSUSE keep their trusted certificates. A bundled Python
+# (the AppImage's) doesn't know where this PC keeps them.
+CERT_FILES = ("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
+              "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem")
+
+
 def fetch_text(url, timeout=8):
     """Download a page. Raises OSError (including URLError) if it can't."""
+    import ssl
     import urllib.request
+    cafile = next((path for path in CERT_FILES if os.path.isfile(path)), None)
+    context = ssl.create_default_context(cafile=cafile) if cafile else None
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
         return response.read().decode("utf-8", errors="replace")
 
 
