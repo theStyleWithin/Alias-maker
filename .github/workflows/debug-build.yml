@@ -1,0 +1,50 @@
+# Builds the AppImages from any branch and puts them in a DRAFT release that only people who
+# can write to this repo can see, so they can be scanned for viruses (VirusTotal and the like)
+# before anyone else gets them. Nothing here changes what the README's download link gives out.
+# Run it from the Actions tab: "Debug build (private draft)" -> Run workflow.
+name: Debug build (private draft)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or commit to build"
+        default: main
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install what the AppImage bundle needs
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends patchelf curl binutils \
+            python3-gi python3-cairo gir1.2-gtk-4.0 gir1.2-vte-3.91 libgtk-4-common librsvg2-common \
+            adwaita-icon-theme shared-mime-info libglib2.0-bin libgdk-pixbuf2.0-bin
+      - name: Build the AppImages
+        run: |
+          packaging/build-appimage.sh
+          rm dist/appimagetool
+          (cd dist && sha256sum -- *.AppImage > SHA256SUMS)
+      - name: Put them in a private draft release
+        run: |
+          sha=$(git rev-parse --short HEAD)
+          # only the debug drafts made by this workflow are replaced, never a real release
+          for tag in $(gh release list --limit 50 --json tagName,isDraft --jq '.[] | select(.isDraft and (.tagName | startswith("debug-"))) | .tagName'); do
+            gh release delete "$tag" --yes
+          done
+          cat > notes.md <<NOTES
+          Private draft: only people who can write to this repo can see it. Not a release.
+
+          Built from \`${{ inputs.ref }}\` ($sha). Download the AppImage, scan it (for example at virustotal.com), and only share it once you're happy. \`SHA256SUMS\` lists the fingerprint of each file.
+          NOTES
+          gh release create "debug-$sha" dist/*.AppImage dist/SHA256SUMS --draft --prerelease \
+            --title "Debug build $sha (private draft)" --notes-file notes.md
