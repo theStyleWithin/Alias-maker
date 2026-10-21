@@ -107,6 +107,29 @@ class TestBarePrompt(PhraseTestCase):
         self.assertEqual(sum(p.startswith("Do what?") for p in prompts), 3)
         self.assertIn('Did you mean: "do the thing"', out)
 
+    def test_typing_doit_again_quotes_and_dashes_still_find_the_command(self):
+        for typed in ("doit do the thing", "'do the thing'", "doit 'do the thing'", "do-the-thing",
+                      "doit do_the_thing", "\"Do The Thing\""):
+            code, out, _ = self.run_doit([], answers=[typed, "no"])
+            self.assertNotIn("I don't know how", out, typed)
+            self.assertIn("Real command: true", out, typed)  # found it, and showed what it runs
+
+    def test_did_you_mean_can_be_answered_with_yes(self):
+        code, out, prompts = self.run_doit([], answers=["do teh thing", "yes", "no"])
+        self.assertIn('Did you mean: "do the thing"?', out)
+        self.assertIn("Type 'y' or 'yes' to do that", out)
+        self.assertIn("Real command: true", out)  # the usual explanation comes first; it never runs on a guess
+        self.assertEqual(code, 0)
+
+    def test_yes_means_nothing_without_a_suggestion(self):
+        code, out, prompts = self.run_doit([], answers=["yes", "never mind"])
+        self.assertIn('I don\'t know how to "yes"', out)
+
+    def test_a_suggestion_with_several_matches_is_not_offered(self):
+        doit.save_custom_command("do the thang", "true", False)
+        _, out, _ = self.run_doit([], answers=["do teh thing", "never mind"])
+        self.assertNotIn("to do that", out)
+
     def test_never_mind_runs_nothing(self):
         code, out, _ = self.run_doit([], answers=["never mind"])
         self.assertEqual(code, 0)
@@ -1066,6 +1089,99 @@ class TestClippySearchHelper(DoitTestCase):
         self.assertIn("Unix & Linux Q&A", out)
 
 
+class TestCommandsFitThisSystem(DoitTestCase):
+    """A saved command that calls a program this PC doesn't have is explained, and this system's
+    own way of doing it is offered. Nothing is swapped without a yes, and nothing runs on a guess."""
+
+    def set_os(self, os_id, like=""):
+        path = self.home / "os-release"
+        path.write_text(f'ID={os_id}\nID_LIKE="{like}"\nPRETTY_NAME="{os_id} test system"\n')
+        os.environ["ALIASMAKER_OS_RELEASE"] = str(path)
+
+    def setUp(self):
+        super().setUp()
+        examples = json.loads((ROOT / "data" / "examples.json").read_text())
+        (self.home / "examples.json").write_text(json.dumps(examples))
+        os.environ["DOIT_EXAMPLES"] = str(self.home / "examples.json")
+        self.set_os("ubuntu", "debian")
+        make_program(self.programs, "apt", "true")
+        make_program(self.programs, "sudo", 'exec "$@"')
+        doit.save_custom_command("update my system", "sudo pacman -Syu", True)
+
+    def test_which_programs_are_missing(self):
+        make_program(self.programs, "curl", "true")
+        make_program(self.programs, "sh", "true")
+        self.assertEqual(doit.missing_programs("sudo pacman -Syu"), ["pacman"])
+        self.assertEqual(doit.missing_programs("curl -fsS https://x.test | sh"), [])
+        self.assertEqual(doit.missing_programs("sudo apt update && sudo apt full-upgrade"), [])
+        self.assertEqual(doit.missing_programs("apt update && dnf upgrade; zypper up"), ["dnf", "zypper"])
+        self.assertEqual(doit.missing_programs("FOO=1 nothere --x"), ["nothere"])
+        self.assertEqual(doit.missing_programs("cd /tmp && echo hi"), [])
+        self.assertEqual(doit.missing_programs("/opt/thing/run.sh $HOME ./local ~/bin/x"), [])
+
+    def test_offers_this_systems_way_and_switches_on_yes(self):
+        code, out, prompts = self.run_doit(["update", "my", "system"], answers=["yes", "no", "no"])
+        self.assertIn('"pacman", which isn\'t on this PC', out)
+        self.assertIn("sudo apt update && sudo apt full-upgrade", out)
+        self.assertTrue(any(p.startswith('Use that for "update my system"') for p in prompts))
+        saved = [c for c in doit.load_custom() if c["phrase"] == "update my system"][0]
+        self.assertEqual(saved["command"], "sudo apt update && sudo apt full-upgrade")
+        self.assertTrue(saved["confirm"])
+        self.assertIn("Real command: sudo apt update && sudo apt full-upgrade", out)  # shown, and asked first
+
+    def test_no_means_nothing_changes_and_nothing_runs(self):
+        code, out, _ = self.run_doit(["update", "my", "system"], answers=["no"])
+        self.assertEqual(code, 1)
+        saved = [c for c in doit.load_custom() if c["phrase"] == "update my system"][0]
+        self.assertEqual(saved["command"], "sudo pacman -Syu")
+        self.assertNotIn("Real command", out)
+
+    def test_other_systems_get_their_own_way(self):
+        for os_id, like, program, expect in (
+                ("manjaro", "arch", "pacman", "sudo pacman -Syu"),
+                ("fedora", "", "dnf", "sudo dnf upgrade --refresh"),
+                ("opensuse-tumbleweed", "opensuse suse", "zypper", "sudo zypper refresh && sudo zypper dist-upgrade"),
+                ("opensuse-leap", "opensuse suse", "zypper", "sudo zypper refresh && sudo zypper update")):
+            self.set_os(os_id, like)
+            make_program(self.programs, program, "true")
+            better = doit.other_way_for_this_pc("update my system")
+            self.assertEqual(better["command"], expect, os_id)
+            os.remove(self.programs / program)
+
+    def test_manjaro_does_not_get_archs_keyring_command(self):
+        self.set_os("manjaro", "arch")
+        make_program(self.programs, "pacman", "true")
+        commands = [e["command"] for e in doit.load_examples() if e["phrase"] == "update my system"]
+        self.assertEqual(commands, ["sudo pacman -Syu"])
+        self.assertNotIn("archlinux-keyring", " ".join(commands))
+
+    def test_steamos_is_not_offered_a_system_update(self):
+        self.set_os("steamos", "arch")
+        make_program(self.programs, "pacman", "true")
+        self.assertIsNone(doit.other_way_for_this_pc("update my system"))
+
+    def test_without_a_known_way_it_says_so_and_does_not_run(self):
+        doit.save_custom_command("make tea", "teamaker --hot", False)
+        code, out, _ = self.run_doit(["make", "tea"], answers=["no"])
+        self.assertEqual(code, 1)
+        self.assertIn('"teamaker", which isn\'t on this PC', out)
+        self.assertIn("/clippy teamaker", out)
+        self.assertNotIn("Real command", out)
+
+    def test_with_nobody_there_it_only_tells_you(self):
+        code, out, _ = self.run_doit(["update", "my", "system"], tty=False)
+        self.assertEqual(code, 1)
+        self.assertIn("sudo apt update && sudo apt full-upgrade", out)
+        saved = [c for c in doit.load_custom() if c["phrase"] == "update my system"][0]
+        self.assertEqual(saved["command"], "sudo pacman -Syu")
+
+    def test_commands_that_exist_run_as_before(self):
+        doit.save_custom_command("update quietly", "sudo apt update", False)
+        code, out, _ = self.run_doit(["--dry-run", "update", "quietly"], answers=["no"])
+        self.assertEqual(code, 0)
+        self.assertIn("[dry run] Would run: sudo apt update", out)
+
+
 class TestRealTerminalCommands(DoitTestCase):
     """One-word commands become real fish commands through Alias Maker's own file."""
 
@@ -1141,6 +1257,7 @@ class TestRealTerminalCommands(DoitTestCase):
         self.assertEqual(doit.shell_name_problem("mine")[0], "taken")
 
     def test_shortcut_runs_through_doit_with_extra_words(self):
+        make_program(self.programs, "lsblk", "true")
         doit.save_custom_command("checkdrives", "lsblk -f", False)
         code, out, _ = self.run_doit(["--dry-run", "--alias", "checkdrives", "--", "/dev/sda", "it's"],
                                      answers=["no"])
