@@ -91,6 +91,7 @@ def text_mode():
 # ---------- the window ----------
 
 def run_window():
+    crash.use_opengl_not_vulkan()  # before GTK loads: no Gamescope Vulkan pop-ups on a Steam Deck
     import gi
     gi.require_version("Gtk", "4.0")
     from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango

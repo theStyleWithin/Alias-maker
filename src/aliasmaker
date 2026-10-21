@@ -41,6 +41,8 @@ if __name__ == "__main__" and not STARTED_AS_APP:
     print(f"{core.APP} {core.VERSION}" if sys.argv[1] == "--version" else __doc__.strip())
     sys.exit(0)
 
+crash.use_opengl_not_vulkan()  # before GTK loads: no Gamescope Vulkan pop-ups on a Steam Deck
+
 try:
     import gi
     gi.require_version("Gtk", "4.0")
@@ -586,6 +588,13 @@ class TerminalWindow(Gtk.ApplicationWindow):
         else:
             argv = command or shell_argv(shell)
         env = dict(os.environ)
+        restore, remove = crash.graphics_env_fixes()  # the shell keeps the user's own graphics settings
+        env.update(restore)
+        if remove:
+            # VTE adds these variables to its own environment instead of replacing it, so
+            # taking a variable out of the list isn't enough: env -u removes it, and execs
+            # the shell in the same process.
+            argv = ["env", *[part for name in remove for part in ("-u", name)], *argv]
         env["PATH"] = SRC_DIR + os.pathsep + env.get("PATH", "")  # doit always works in here
         env["ALIASMAKER"] = "1"
         env["TERM_PROGRAM"] = core.TERMINAL_COMMAND  # so tools like fastfetch say "aliasmaker"

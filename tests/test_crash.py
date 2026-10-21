@@ -46,6 +46,35 @@ class CrashTestCase(unittest.TestCase):
         path.write_text(json.dumps({"version": 1, "commands": commands}))
 
 
+class TestGraphics(CrashTestCase):
+    def setUp(self):
+        super().setUp()
+        for name in ("GSK_RENDERER", "GDK_DEBUG", "GDK_DISABLE"):
+            os.environ.pop(name, None)
+        patch = mock.patch.object(crash, "_graphics_before", {})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_gtk_is_pointed_at_opengl_with_vulkan_off_and_the_shell_never_sees_it(self):
+        os.environ["GDK_DEBUG"] = "portals"
+        self.assertTrue(crash.use_opengl_not_vulkan())
+        self.assertEqual(os.environ["GSK_RENDERER"], "ngl")
+        self.assertEqual(os.environ["GDK_DEBUG"], "portals,vulkan-disable")
+        self.assertEqual(os.environ["GDK_DISABLE"], "vulkan")
+        restore, remove = crash.graphics_env_fixes()
+        self.assertEqual(restore, {"GDK_DEBUG": "portals"})
+        self.assertEqual(sorted(remove), ["GDK_DISABLE", "GSK_RENDERER"])
+        self.assertFalse(crash.use_opengl_not_vulkan(), "only the first call changes anything")
+        self.assertIn("GSK_RENDERER=ngl, Vulkan switched off", "\n".join(crash.system_lines()))
+
+    def test_a_renderer_the_user_chose_is_left_alone(self):
+        os.environ["GSK_RENDERER"] = "vulkan"
+        self.assertFalse(crash.use_opengl_not_vulkan())
+        self.assertEqual(os.environ["GSK_RENDERER"], "vulkan")
+        self.assertNotIn("GDK_DISABLE", os.environ)
+        self.assertEqual(crash.graphics_env_fixes(), ({}, []))
+
+
 class TestScrub(CrashTestCase):
     def test_hides_private_details(self):
         text = (f"{self.home}/notes.txt by {getpass.getuser()} on {socket.gethostname()} "

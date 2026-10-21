@@ -201,6 +201,37 @@ def os_name():
     return platform.system()
 
 
+# ---------- graphics: keep GTK away from Vulkan ----------
+#
+# On a Steam Deck in desktop mode, Valve's Gamescope Vulkan layer shows a "Gamescope WSI
+# Layer Error" pop-up (a zenity window) whenever GTK 4 draws a window with Vulkan. A
+# terminal has no use for Vulkan, so GTK is pointed at OpenGL, and Vulkan is switched off so
+# GTK can't fall back to it if OpenGL fails. A renderer the user chose is left alone, and
+# the shell inside the window never sees these settings (see graphics_env_fixes).
+
+_graphics_before = {}
+
+
+def use_opengl_not_vulkan():
+    """Call before GTK loads. Returns True if it changed anything."""
+    if os.environ.get("GSK_RENDERER") or _graphics_before:
+        return False
+    for name, value in (("GSK_RENDERER", "ngl"), ("GDK_DEBUG", "vulkan-disable"),
+                        ("GDK_DISABLE", "vulkan")):
+        before = os.environ.get(name)
+        _graphics_before[name] = before
+        os.environ[name] = f"{before},{value}" if before else value
+    return True
+
+
+def graphics_env_fixes():
+    """(restore, remove) for the shell and the programs started from it: the user's own
+    values to put back, and the names to take out again."""
+    restore = {name: value for name, value in _graphics_before.items() if value is not None}
+    remove = [name for name, value in _graphics_before.items() if value is None]
+    return restore, remove
+
+
 def system_lines():
     desktop = os.environ.get("XDG_CURRENT_DESKTOP") or "unknown"
     session = os.environ.get("XDG_SESSION_TYPE") or ("wayland" if os.environ.get("WAYLAND_DISPLAY")
@@ -213,6 +244,8 @@ def system_lines():
         f"OS: {os_name()}",
         f"Kernel: {platform.release()}",
         f"Desktop: {desktop} ({session})",
+        f"Graphics: GSK_RENDERER={os.environ.get('GSK_RENDERER') or 'default'}"
+        + (", Vulkan switched off" if "vulkan" in (os.environ.get("GDK_DISABLE") or "") else ""),
         f"Shell: {shell}",
         "Libraries: " + ", ".join(libs),
     ]
