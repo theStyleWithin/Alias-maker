@@ -44,7 +44,7 @@
       "confirm": true,
       "warning": "This updates your whole system, including the kernel. Take a snapshot first if you want an undo button.",
       "os": ["arch"],
-      "not_os": ["cachyos", "steamos"],
+      "not_os": ["cachyos", "steamos", "manjaro"],
       "needs": ["pacman"]
     },
     {
@@ -66,6 +66,36 @@
       "warning": "This updates your whole system, including the kernel. It asks once more before installing.",
       "os": ["fedora"],
       "needs": ["dnf"]
+    },
+    {
+      "id": "update-system-manjaro",
+      "phrase": "update my system",
+      "command": "sudo pacman -Syu",
+      "explanation": "Updates everything installed on Manjaro, using Manjaro's own packages.",
+      "confirm": true,
+      "warning": "This updates your whole system, including the kernel. It asks once more before installing.",
+      "os": ["manjaro"],
+      "needs": ["pacman"]
+    },
+    {
+      "id": "update-system-opensuse-tumbleweed",
+      "phrase": "update my system",
+      "command": "sudo zypper refresh && sudo zypper dist-upgrade",
+      "explanation": "Checks for new versions and updates everything installed on openSUSE Tumbleweed.",
+      "confirm": true,
+      "warning": "This updates your whole system, including the kernel. It asks once more before installing.",
+      "os": ["opensuse-tumbleweed"],
+      "needs": ["zypper"]
+    },
+    {
+      "id": "update-system-opensuse-leap",
+      "phrase": "update my system",
+      "command": "sudo zypper refresh && sudo zypper update",
+      "explanation": "Checks for new versions and updates everything installed on openSUSE Leap.",
+      "confirm": true,
+      "warning": "This updates your whole system, including the kernel. It asks once more before installing.",
+      "os": ["opensuse-leap"],
+      "needs": ["zypper"]
     },
     {
       "id": "update-apps-flatpak",

@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"], "clippy_web": None}
@@ -129,6 +129,21 @@ def normalize(text):
         if text.endswith(polite):
             text = text[: -len(polite)]
     return text.strip(" !?.,")
+
+
+def clean_phrase(text):
+    """What someone typed, without the things that aren't part of the phrase: quotes around it
+    and a "doit" at the start (typed again at the "Do what?" prompt)."""
+    text = text.strip()
+    for _ in range(3):
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+            text = text[1:-1].strip()
+        words = text.split(None, 1)
+        if len(words) == 2 and words[0].lower() == "doit":
+            text = words[1].strip()
+        else:
+            break
+    return text
 
 
 def highlight(text):
@@ -1599,6 +1614,7 @@ class State:
         self.examples = examples
         self.settings = settings
         self.dry_run = dry_run
+        self.suggestion = None  # the one phrase "Did you mean" offered, if any
         self.custom = load_custom()
         self._library = None
 
@@ -1990,7 +2006,77 @@ def run_entry(entry, phrase, state):
     return code
 
 
+SH_WORDS = {"cd", "echo", "printf", "export", "unset", "set", "exit", "true", "false", "test", "read",
+            "exec", "eval", "type", "command", "wait", "umask", "ulimit", "alias", "trap", "shift",
+            ".", ":", "[", "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
+            "case", "esac", "in", "!", "{", "}", "sudo", "doas", "env", "time", "nohup", "xargs"}
+
+
+def missing_programs(command):
+    """Programs a command calls that this PC doesn't have, e.g. ["pacman"] for "sudo pacman -Syu"
+    on Ubuntu. Looks at each part of a chain (&&, ||, ;, |) and only names plain program names
+    (never paths, variables or anything it can't be sure of)."""
+    missing = []
+    for part in re.split(r"&&|\|\||;|\|", command):
+        words = part.split()
+        while words and (words[0] in ("sudo", "doas", "env", "nohup", "time") or "=" in words[0]
+                         or words[0].startswith("-")):
+            words = words[1:]
+        if not words:
+            continue
+        name = words[0]
+        if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", name) and name not in SH_WORDS
+                and not shutil.which(name) and name not in missing):
+            missing.append(name)
+    return missing
+
+
+def other_way_for_this_pc(phrase):
+    """The example command with this phrase that suits this PC's system, if there is one."""
+    norm = normalize(phrase)
+    return next((e for e in load_examples() if normalize(e["phrase"]) == norm), None)
+
+
+def check_programs_exist(entry, phrase, state):
+    """A saved command can call a program this PC doesn't have (made on another system, or the
+    software was removed). Say so in plain words, and offer this system's way of doing the same
+    thing if Alias Maker knows it. Returns the entry to run, or None to stop."""
+    if entry.get("id") != "custom":
+        return entry
+    missing = missing_programs(entry["command"])
+    if not missing:
+        return entry
+    this_os = detect_os()
+    names = ", ".join(f'"{m}"' for m in missing)
+    print(f"This command uses {names}, which "
+          f"{'isn' + chr(39) + 't' if len(missing) == 1 else 'aren' + chr(39) + 't'} on this PC "
+          f"({this_os['name']}), so it can't work here as it is.")
+    better = other_way_for_this_pc(phrase)
+    if better and better["command"] != entry["command"] and interactive():
+        print(f'On {this_os["name"]}, Alias Maker\'s way to "{better["phrase"]}" is:')
+        print(f"   {better['command']}")
+        answer = ask(f"Use that for \"{normalize(phrase)}\" from now on? "
+                     f"(type {yes_hint(state.settings)} for yes) ")
+        if is_yes(answer, state.settings):
+            save_custom_command(phrase, better["command"], better.get("confirm", False),
+                                example_notes(better))
+            write_shortcuts()
+            print("Saved. Here it is:\n")
+            return custom_entry(next(c for c in load_custom()
+                                     if normalize(c["phrase"]) == normalize(phrase)), state)
+    elif better and better["command"] != entry["command"]:
+        print(f'On {this_os["name"]}, Alias Maker\'s way to "{better["phrase"]}" is: {better["command"]}')
+        print("Run doit in a terminal to switch to it, or change it with Edit Command.")
+    else:
+        print(f"Install the software it needs, or change the command with Edit Command. "
+              f"(Try: /clippy {missing[0]})")
+    return None
+
+
 def run_entry_flow(entry, phrase, state):
+    entry = check_programs_exist(entry, phrase, state)
+    if entry is None:
+        return 1
     first_run_logging(state.settings)
     if not explain_and_confirm(entry, state.settings):
         print("Okay, not doing it.")
@@ -2000,16 +2086,23 @@ def run_entry_flow(entry, phrase, state):
 
 def handle(text, state):
     """Returns an exit code, or None if the phrase wasn't recognised."""
+    text = clean_phrase(text)
     norm = normalize(text)
     builtin = match_builtin(norm)
     if builtin:
         return run_builtin(*builtin, state)
     custom = state.custom_map.get(norm)
+    if custom is None and re.search(r"[-_]", norm):  # check-my-drives: dashes typed for spaces
+        norm = normalize(re.sub(r"[-_]+", " ", norm))
+        custom = state.custom_map.get(norm)
+    state.suggestion = None
     if custom is None:
         print(f"I don't know how to \"{text.strip()}\" yet.")
         guesses = difflib.get_close_matches(norm, list(state.custom_map), n=3, cutoff=0.6)
         if guesses:
             print("Did you mean: " + ", ".join(f'"{g}"' for g in guesses) + "?")
+            if len(guesses) == 1:
+                state.suggestion = guesses[0]
         else:
             print("Make it a command with: doit create (or Create Command in the menu). "
                   "Type 'doit help' to see what doit understands.")
@@ -2086,15 +2179,20 @@ def main(argv):
         if text is None:
             print("\nOkay, never mind.")
             return 0
+        text = clean_phrase(text)
         norm = normalize(text)
         if not norm:
             continue
         if norm in NEVER_MIND:
             print("Okay, never mind.")
             return 0
+        if state.suggestion and is_yes(text, state.settings):
+            text, state.suggestion = state.suggestion, None  # yes: the one thing it asked about
         code = handle(text, state)
         if code is not None:
             return code
+        if state.suggestion:
+            print(f"Type {yes_hint(state.settings)} to do that, or type something else.")
 
 
 if __name__ == "__main__":

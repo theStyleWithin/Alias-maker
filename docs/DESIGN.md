@@ -43,7 +43,9 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Graphics: OpenGL instead of Vulkan, so no Gamescope WSI pop-up on a Steam Deck | Built; the renderer choice and the clean shell environment are tested here, the pop-up itself can only be confirmed on a Steam Deck |
 | AUR hand-off kit (PKGBUILD, .SRCINFO, instructions) in every release | Built; the author won't publish it, a volunteer can |
 | Flathub hand-off kit (manifest, metainfo, desktop file, porting notes) in every release | Built, not build-tested; the app needs the code changes in PORTING.md to run in a Flatpak |
-| Six ready-made commands turned into examples (no built-in phrases) | Built |
+| Six ready-made commands turned into examples (no built-in phrases) | Built; "update my system" has an example per system: CachyOS, Arch, Manjaro (its own keyring), Debian/Ubuntu/Mint, Fedora, openSUSE Tumbleweed and Leap (the openSUSE and Manjaro commands are from the distros' documented update steps, not tried on those systems) |
+| Before running a saved command, check its programs exist on this PC; if not, explain and offer this system's example for the same phrase (only on a yes) | Built (1.1.1); tested with stand-ins; not tried on other distros |
+| `doit` waiting prompt accepts `doit phrase`, quoted phrases and dashes; "Did you mean" with one match can be answered yes | Built (1.1.1), after the author hit it on a Steam Deck |
 | One-word commands become real fish commands (Alias Maker's conf.d file), with naming help; they work at once in open Alias Maker windows | Built; the fish side tested with real fish 4.0 |
 | "Do what? I am waiting..." prompt | Built |
 | Third-party install flow (show source URL, ask first) | Built |

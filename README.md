@@ -184,7 +184,9 @@ Shortcuts still go through Alias Maker: they show the real command first, ask be
 
 ### Example commands you can make
 
-Alias Maker doesn't come with ready-made commands. These are examples to get you started: pick one in **Create Command** (or `doit create`), name it whatever you like, and save it. You're only offered the ones that fit your PC: "update my system" uses pacman on CachyOS and Arch, apt on Ubuntu and Debian, and dnf on Fedora (SteamOS's system is read-only, so there it's "update my apps" with `flatpak update` instead), and "take a snapshot" only appears if snapper is installed.
+Alias Maker doesn't come with ready-made commands. These are examples to get you started: pick one in **Create Command** (or `doit create`), name it whatever you like, and save it. You're only offered the ones that fit your PC: "update my system" uses pacman on CachyOS, Arch and Manjaro (each with its own packages), apt on Ubuntu, Mint and Debian, dnf on Fedora, and zypper on openSUSE (SteamOS's system is read-only, so there it's "update my apps" with `flatpak update` instead), and "take a snapshot" only appears if snapper is installed.
+
+If a command you saved calls a program this PC doesn't have (say it was made on another system), Alias Maker tells you in plain words before running anything. If it knows how your system does the same thing, it offers that instead, and only switches if you say yes. At the `Do what? I am waiting...` prompt you can type just the phrase, but typing `doit` first, quotes around it, or dashes instead of spaces also work. If you almost typed a command you made, it says "Did you mean" and you can answer `y`.
 
 **When a command isn't found,** Alias Maker says why in plain words instead of just "Unknown command": a typo (with programs you have that have a similar name), software that isn't installed (plus your system's own hint on which package has it, when it has one), or one of your own phrases typed without `doit` in front.
 
