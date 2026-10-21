@@ -675,7 +675,10 @@ class TestClippy(DoitTestCase):
         arch = {"id": "arch", "name": "Arch Wiki", "kind": "mediawiki", "api": f"{self.wiki.base}/api.php"}
         docs = {"systems": [
             {"os": ["cachyos"], "name": "CachyOS", "sources": [self.cachyos, arch]},
-            {"os": ["steamos"], "name": "SteamOS", "sources": [dict(arch, note="SteamOS is built on Arch Linux")]},
+            {"os": ["steamos"], "name": "SteamOS", "sources": [
+                {"id": "forums", "name": "Steam forums", "kind": "link", "url": "https://docs.example.test/forums/",
+                 "open_label": "Open the forums", "note": "community answers, not official documentation"},
+                dict(arch, note="SteamOS is built on Arch Linux")]},
             {"os": ["linuxmint"], "name": "Linux Mint", "sources": [
                 {"id": "mint", "name": "Linux Mint guide", "kind": "search",
                  "pattern": "https://docs.example.test/mint?q={q}", "home": "https://docs.example.test/mint/"}]},
@@ -719,14 +722,19 @@ class TestClippy(DoitTestCase):
         _, out, _ = self.run_doit(["clippy", "chrooting"], tty=False)
         self.assertIn("Arch Wiki (SteamOS is built on Arch Linux)", out)
         self.assertIn("https://wiki.archlinux.org/title/Chroot", out)
+        self.assertIn("Steam forums (community answers, not official documentation)", out)
+        self.assertIn("Open the forums", out, "a source can name its own link")
+        self.assertNotIn("Open the official page", out)
         self.assertNotIn("CachyOS", out)
 
     def test_steamos_offline_says_it_could_not_reach_the_wiki_instead_of_finding_nothing(self):
         self.set_os("steamos", "arch")
         self.wiki.stop()
         code, out, _ = self.run_doit(["clippy", "chrooting"], tty=False)
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 0, "the forums link is still there to open")
         self.assertIn("seem to be offline", out)
+        self.assertIn("https://docs.example.test/forums/", out)
+        self.assertNotIn("I didn't find anything", out)
         self.wiki = FakeWiki(self.home / "wiki2")
 
     def test_linux_mint_gets_its_own_guide_with_a_search_and_the_first_match_wins(self):
@@ -778,6 +786,10 @@ class TestClippy(DoitTestCase):
                     self.assertIn("{q}", source["pattern"])
         self.assertIn("linuxmint", by_os)
         self.assertIn("manjaro", by_os)
+        steamos = by_os["steamos"]["sources"]
+        self.assertEqual(steamos[0]["url"], "https://steamcommunity.com/discussions/")
+        self.assertIn("not official", steamos[0]["note"], "the forums are labelled as community answers")
+        self.assertEqual(steamos[0]["open_label"], "Open the forums")
         self.assertEqual(by_os["manjaro"]["sources"][0]["home"], "https://wiki.manjaro.org/index.php?title=Main_Page")
         self.assertNotIn("cachyos", json.dumps(by_os["ubuntu"]).lower())
 

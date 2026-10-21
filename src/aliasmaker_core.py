@@ -1188,6 +1188,7 @@ def clippy(state, query):
               "so I'll only look on this PC.\n")
     for source in (system or {}).get("sources", []):
         kind = source.get("kind")
+        open_label = source.get("open_label", "Open the official page")
         if kind == "sitemap":
             index, online = source_index(source)
             saved = saved or bool(index)
@@ -1202,11 +1203,11 @@ def clippy(state, query):
             pages = [{"title": f'Search it for "{topic}"', "description": "",
                       "url": source["pattern"].replace("{q}", quote_plus(topic))}]
         elif kind == "link":
-            pages = [{"title": "Open the official page", "description": "", "url": source["url"]}]
+            pages = [{"title": open_label, "description": "", "url": source["url"]}]
         else:
             pages = []
         if source.get("home") and kind != "link":  # the front page too, so there's always something to open
-            pages.append({"title": "Open the official page", "description": "", "url": source["home"]})
+            pages.append({"title": open_label, "description": "", "url": source["home"]})
         if not pages:
             continue
         print(source["name"] + (f" ({source['note']})" if source.get("note") else ""))

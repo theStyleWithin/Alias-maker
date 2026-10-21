@@ -67,7 +67,7 @@ The folder after it still tells you where you are (`~` is your home folder), and
 
 Pick a number and the page opens in your browser, or the manual opens right in the terminal. Plain questions work too: `/clippy how do I set up gaming`. Without internet it still shows what's on your PC (and wiki pages it saw before). It's not AI: it only shows real pages. `doit clippy chrooting` does the same thing.
 
-`/clippy` points you at the documentation of the system Alias Maker detects on your PC: the CachyOS wiki on CachyOS, the Arch Wiki on Arch and SteamOS (they're built on Arch), the Manjaro wiki on Manjaro, the Linux Mint guide on Mint, Ubuntu's documentation on Ubuntu. It never sends you to another system's pages: if it doesn't know your system's documentation yet, it says so and only looks on your PC. The list lives in `data/docs.json` (one entry per system, easy to extend: Debian, Fedora and more are waiting for someone to add their documentation links).
+`/clippy` points you at the documentation of the system Alias Maker detects on your PC: the CachyOS wiki on CachyOS, the Steam Community forums and the Arch Wiki on SteamOS (it's built on Arch), the Arch Wiki on Arch, the Manjaro wiki on Manjaro, the Linux Mint guide on Mint, Ubuntu's documentation on Ubuntu. It never sends you to another system's pages: if it doesn't know your system's documentation yet, it says so and only looks on your PC. The list lives in `data/docs.json` (one entry per system, easy to extend: Debian, Fedora and more are waiting for someone to add their documentation links).
 
 The rest of the menu works like Konsole's: New Window, Copy, Paste, Full Screen, and font size, with the same shortcuts.
 

@@ -30,6 +30,14 @@
       "name": "SteamOS",
       "sources": [
         {
+          "id": "steam-forums",
+          "name": "Steam Community forums",
+          "kind": "link",
+          "url": "https://steamcommunity.com/discussions/",
+          "note": "community answers, not official documentation",
+          "open_label": "Open the forums"
+        },
+        {
           "id": "arch",
           "name": "Arch Wiki",
           "kind": "mediawiki",
