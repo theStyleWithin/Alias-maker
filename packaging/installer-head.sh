@@ -79,7 +79,7 @@ bold "Building and installing Alias Maker..."
 (cd "$work" && makepkg --syncdeps --install --noconfirm --clean)
 
 # An older copy from install.sh (in ~/.local/bin) would be found before this one.
-for name in aliasmaker doit; do
+for name in aliasmaker doit aliasmaker-debug; do
     if [[ -L "$HOME/.local/bin/$name" ]]; then
         say
         say "Note: an older Alias Maker from install.sh is still in ~/.local/bin and would run instead."
@@ -91,6 +91,8 @@ done
 say
 bold "Alias Maker $VERSION is installed."
 say "Open \"Alias Maker\" from your app launcher, or type: aliasmaker"
+say "If something goes wrong, open \"Alias Maker Debug\" (or type: aliasmaker-debug): it has"
+say "crash reports and a health check, and saves everything into one file to send the developer."
 say "The first time it opens, it scans your installed software to fill the Database."
 say "To make it your default terminal: System Settings → Default Applications → Terminal emulator → Alias Maker"
 say "To uninstall: bash $(basename "$0") --uninstall   (or: sudo pacman -R alias-maker)"

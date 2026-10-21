@@ -2,7 +2,9 @@
 # Installs Alias Maker for the current user only. No root needed.
 #   aliasmaker  the terminal window (in your app launcher as "Alias Maker")
 #   doit        the prefix you type inside it: doit <phrase>
-# Uninstall: rm ~/.local/bin/aliasmaker ~/.local/bin/doit ~/.local/share/applications/aliasmaker.desktop
+#   aliasmaker-debug  crash reports and a health check, for testers ("Alias Maker Debug")
+# Uninstall: rm ~/.local/bin/aliasmaker ~/.local/bin/doit ~/.local/bin/aliasmaker-debug
+#            ~/.local/share/applications/aliasmaker.desktop ~/.local/share/applications/aliasmaker-debug.desktop
 # (your data: ~/.config/alias-maker and ~/.local/share/alias-maker)
 set -euo pipefail
 
@@ -16,9 +18,23 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 mkdir -p "$bin_dir" "$apps_dir"
-chmod +x "$repo/src/aliasmaker" "$repo/src/doit"
+chmod +x "$repo/src/aliasmaker" "$repo/src/doit" "$repo/src/aliasmaker-debug"
 ln -sf "$repo/src/aliasmaker" "$bin_dir/aliasmaker"
 ln -sf "$repo/src/doit" "$bin_dir/doit"
+ln -sf "$repo/src/aliasmaker-debug" "$bin_dir/aliasmaker-debug"
+
+cat > "$apps_dir/aliasmaker-debug.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Alias Maker Debug
+Comment=Crash reports and a health check for Alias Maker, to send to the developer
+Exec="$repo/src/aliasmaker-debug"
+Icon=dialog-warning
+Terminal=false
+Categories=System;Utility;
+Keywords=crash;bug;report;debug;problem;alias;doit;
+StartupWMClass=io.github.thestylewithin.aliasmaker.debug
+EOF
 
 cat > "$apps_dir/aliasmaker.desktop" <<EOF
 [Desktop Entry]

@@ -54,12 +54,24 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Text menu (`doit menu`), terminal search (`doit search`), `doit my commands`, `doit rescan` | Removed: the window's ☰ menu and Database replace them |
 | Terminal Settings in the ☰ menu: command log switch, Command Log table, yes word | Built, untested on real hardware |
 | Terminal commands kept for people learning the terminal: `doit create`, `doit forget`/`doit delete` | Built |
+| Alias Maker Debug: crash reports (errors and sudden crashes), scrubbed of private details, health check, one-file export, Report a Problem in the ☰ menu (`src/aliasmaker-debug`, `src/aliasmaker_crash.py`) | Built; recorder, scrubbing, text mode and export tested, window checked headless |
+| Tester releases on GitHub (installer, source, checksums) | Built from 0.7.0 |
 | Tabs, split view, find, profiles | Not yet |
 | Plain-English explanation for every scanned program | Stretch goal |
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far, not yet on CachyOS or the fish shell. The engine has 71 automated tests; the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (122 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+Tested in a Linux sandbox only so far, not yet on CachyOS; the fish parts were tested with real fish 4.0. There are 91 automated tests (78 for the engine, 13 for the crash recorder and Alias Maker Debug); the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (122 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+
+## Alias Maker Debug and crash reports
+
+Testers shouldn't have to describe a crash or type anything to report one, and shouldn't have to worry about what a report gives away.
+
+- **The recorder** (`src/aliasmaker_crash.py`, standard library only) loads before anything else in the window and `doit`, so a broken install still leaves a report. Python errors are caught through `sys.excepthook` and `threading.excepthook` (PyGObject passes errors in GTK callbacks there too, and the window keeps running). Sudden crashes, like a segmentation fault in GTK or VTE, can't run Python code, so the window arms `faulthandler` on a `.running-<pid>.txt` file; a clean exit deletes it, and the next start of the window or of Alias Maker Debug turns a leftover one into a normal report and the window says "Alias Maker closed suddenly last time" in yellow. GTK or VTE failing to load is saved as a startup problem. Ctrl-C is never a crash.
+- **What a report has:** what happened and where (file, function, line), the last 15 steps (menu items and windows opened, never typed text), Alias Maker's version, OS, kernel, desktop and session type, shell name, and Python, PyGObject, GTK and VTE versions, then the traceback for the developer.
+- **Scrubbing:** before saving, the home folder becomes `~`; the user name, PC name, other `/home/<name>` folders, email addresses, IP and MAC addresses, URL logins, `password=`/`--password`/`token:` values, long tokens, the user's own phrases and commands (bare program names like `htop` stay) and the words typed after `doit` are replaced. Up to 50 reports are kept in `~/.local/share/alias-maker/crashes/`.
+- **The app** (`src/aliasmaker-debug`, GTK 4 only, no VTE) has two pages: Crash Reports (the list, the full text of the picked one, Save Everything for the Developer, Copy, Save, Report on GitHub, Delete, Delete All with a second click, Test the Crash Recorder) and Health Check. With no desktop, or if GTK won't load, it falls back to a text menu. Saved files go to `~/Downloads` (or the home folder). Report on GitHub opens a new issue on `ISSUES_URL` and copies the report to paste, since a whole report is too long for a link.
+- `doit --test-crash` raises a test error on purpose; that's what Test the Crash Recorder runs.
 
 ## Wrapper
 
@@ -136,6 +148,7 @@ Enlarge Font             Ctrl++
 Reset Font Size          Ctrl+Alt+0
 Shrink Font              Ctrl+-
 ──────────
+Report a Problem         opens Alias Maker Debug; "(2 new)" when there are unseen reports
 About Alias Maker
 ```
 

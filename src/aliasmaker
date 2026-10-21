@@ -18,18 +18,26 @@ Needs: sudo pacman -S vte4 python-gobject
 import os
 import pwd
 import shlex
+import subprocess
 import sys
 import threading
 
 SRC_DIR = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, SRC_DIR)
 
+import aliasmaker_crash as crash  # noqa: E402  (first, so even a broken install leaves a report)
+
+STARTED_AS_APP = __name__ == "__main__" and not (len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help", "--version"))
+NEW_CRASHES = []  # sudden crashes from last time, turned into reports at startup
+if STARTED_AS_APP:
+    crash.install("window")
+
 import aliasmaker_core as core  # noqa: E402
 
 MISSING_PACKAGES = ("The Alias Maker window needs two packages from CachyOS's repos:\n"
                     "  sudo pacman -S vte4 python-gobject")
 
-if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help", "--version"):
+if __name__ == "__main__" and not STARTED_AS_APP:
     print(f"{core.APP} {core.VERSION}" if sys.argv[1] == "--version" else __doc__.strip())
     sys.exit(0)
 
@@ -41,7 +49,18 @@ try:
     from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango, Vte  # noqa: E402
 except (ImportError, ValueError) as err:
     print(f"{MISSING_PACKAGES}\n({err})", file=sys.stderr)
+    if STARTED_AS_APP:
+        crash.record_startup_problem(f"GTK or VTE couldn't load: {err}", MISSING_PACKAGES)
+        print("A report was saved. Open \"Alias Maker Debug\" (or type: aliasmaker-debug) "
+              "for a health check.", file=sys.stderr)
     sys.exit(1)
+
+crash.set_versions(**{
+    "PyGObject": getattr(gi, "__version__", "?"),
+    "GTK": f"{Gtk.get_major_version()}.{Gtk.get_minor_version()}.{Gtk.get_micro_version()}",
+    "VTE": f"{Vte.get_major_version()}.{Vte.get_minor_version()}.{Vte.get_micro_version()}",
+})
+DEBUG_APP = os.path.join(SRC_DIR, "aliasmaker-debug")
 
 APP_ID = "io.github.thestylewithin.aliasmaker"
 TERMINAL_NAME = "Let'sdostuff"  # what the title and prompt say instead of "fish": Let'sdostuff~
@@ -132,6 +151,20 @@ def text_label(text, css=None, wrap=True):
     if css:
         label.add_css_class(css)
     return label
+
+
+def report_problem_label():
+    """The menu item for Alias Maker Debug, with a count of reports not looked at yet."""
+    new = crash.unseen_count()
+    return f"Report a Problem ({new} new)" if new else "Report a Problem"
+
+
+def open_debug_app():
+    """Alias Maker Debug: crash reports and a health check, in its own window."""
+    try:
+        subprocess.Popen([sys.executable, DEBUG_APP], start_new_session=True)
+    except OSError as err:
+        print(f"Couldn't open Alias Maker Debug: {err}", file=sys.stderr)
 
 
 class Row(GObject.Object):
@@ -380,6 +413,7 @@ class Scanner:
         self.listeners = []
 
     def start(self):
+        crash.note("Database scan started")
         if self.running:
             return
         self.running = True
@@ -493,7 +527,8 @@ class TerminalWindow(Gtk.ApplicationWindow):
              ("Enlarge Font", "win.zoom-in", "<Control>plus"),
              ("Reset Font Size", "win.zoom-reset", "<Control><Alt>0"),
              ("Shrink Font", "win.zoom-out", "<Control>minus")],
-            [("About Alias Maker", "win.about", None)],
+            [(report_problem_label(), "win.report-problem", None),
+             ("About Alias Maker", "win.about", None)],
         ]
         for entries in sections:
             section = Gio.Menu()
@@ -535,10 +570,11 @@ class TerminalWindow(Gtk.ApplicationWindow):
             "zoom-out": lambda: self.zoom(1 / 1.1),
             "zoom-reset": lambda: self.zoom(None),
             "about": self.show_about,
+            "report-problem": open_debug_app,
         }
         for name, callback in actions.items():
             action = Gio.SimpleAction.new(name, None)
-            action.connect("activate", lambda _a, _p, cb=callback: cb())
+            action.connect("activate", lambda _a, _p, cb=callback, n=name: (crash.note(f"menu: {n}"), cb()))
             self.add_action(action)
 
     # --- the shell inside ---
@@ -556,6 +592,10 @@ class TerminalWindow(Gtk.ApplicationWindow):
         env["ALIASMAKER_NAME"] = TERMINAL_NAME
         envv = [f"{key}={value}" for key, value in env.items()]
         cwd = workdir if workdir and os.path.isdir(workdir) else os.path.expanduser("~")
+        if NEW_CRASHES and not command:
+            NEW_CRASHES.clear()  # say it once, in the first window
+            self.term.feed(("\x1b[1;33mAlias Maker closed suddenly last time. A crash report was "
+                            "saved: open the \u2630 menu, then Report a Problem.\x1b[0m\r\n").encode())
         if not command and os.path.basename(shell) != "fish":
             # fish shows the DOIT welcome itself (lets-do-stuff.fish); for other shells, show it here
             try:
@@ -1475,6 +1515,7 @@ class AliasMakerApp(Gtk.Application):
             self.scanner.start()  # first time Alias Maker takes over: fill the Database
 
     def new_window(self, workdir=None, command=None):
+        crash.note("terminal window opened")
         window = TerminalWindow(self, workdir, command)
         self.terminals.append(window)
         self.last_terminal = window
@@ -1559,6 +1600,8 @@ def name_process():
 
 
 def main(argv):
+    NEW_CRASHES.extend(crash.install("window", sudden_crashes=True))
+    crash.note("Alias Maker opened")
     name_process()
     workdir, command = parse_args(argv)
     app = AliasMakerApp(workdir, command)

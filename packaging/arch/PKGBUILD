@@ -28,15 +28,18 @@ package() {
     # The app keeps the repo's layout, so it finds its own files the same way.
     install -Dm755 src/aliasmaker "$lib/src/aliasmaker"
     install -Dm755 src/doit "$lib/src/doit"
+    install -Dm755 src/aliasmaker-debug "$lib/src/aliasmaker-debug"
     install -Dm644 src/aliasmaker_core.py "$lib/src/aliasmaker_core.py"
+    install -Dm644 src/aliasmaker_crash.py "$lib/src/aliasmaker_crash.py"
     install -Dm644 src/shell/lets-do-stuff.fish "$lib/src/shell/lets-do-stuff.fish"
     install -Dm644 src/shell/doit-logo.txt "$lib/src/shell/doit-logo.txt"
     install -Dm644 data/examples.json "$lib/data/examples.json"
-    python -m compileall -q -d "/usr/lib/$pkgname/src" "$lib/src/aliasmaker_core.py"
+    python -m compileall -q -d "/usr/lib/$pkgname/src" "$lib/src/aliasmaker_core.py" "$lib/src/aliasmaker_crash.py"
 
     install -dm755 "$pkgdir/usr/bin"
     ln -s "../lib/$pkgname/src/aliasmaker" "$pkgdir/usr/bin/aliasmaker"
     ln -s "../lib/$pkgname/src/doit" "$pkgdir/usr/bin/doit"
+    ln -s "../lib/$pkgname/src/aliasmaker-debug" "$pkgdir/usr/bin/aliasmaker-debug"
 
     install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/aliasmaker.desktop" <<DESKTOP
 [Desktop Entry]
@@ -50,6 +53,19 @@ Terminal=false
 Categories=System;TerminalEmulator;
 Keywords=terminal;shell;prompt;command;commandline;alias;doit;
 StartupWMClass=io.github.thestylewithin.aliasmaker
+DESKTOP
+
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/aliasmaker-debug.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Alias Maker Debug
+Comment=Crash reports and a health check for Alias Maker, to send to the developer
+Exec=aliasmaker-debug
+Icon=dialog-warning
+Terminal=false
+Categories=System;Utility;
+Keywords=crash;bug;report;debug;problem;alias;doit;
+StartupWMClass=io.github.thestylewithin.aliasmaker.debug
 DESKTOP
 
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

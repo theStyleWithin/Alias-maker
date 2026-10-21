@@ -1,0 +1,383 @@
+#!/usr/bin/env python3
+"""Alias Maker Debug: crash reports and a health check, for testers.
+
+When Alias Maker crashes or hits an error, it saves a report on this PC. This app
+shows those reports, checks that everything Alias Maker needs is installed, and
+saves it all into one file to send to the developer.
+
+Nothing is ever sent by itself. Reports never include what you typed or saw in the
+terminal, and private details (user name, PC name, email addresses, passwords, your
+own commands) are replaced before they're saved. You can read every word first.
+
+Usage:
+  aliasmaker-debug              the window (or text mode if there's no desktop)
+  aliasmaker-debug --text       text mode, in any terminal
+  aliasmaker-debug --health     print the health check
+  aliasmaker-debug --save-all   save everything for the developer into one file
+"""
+
+import os
+import subprocess
+import sys
+
+SRC_DIR = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, SRC_DIR)
+
+import aliasmaker_crash as crash  # noqa: E402  (standard library only: always loads)
+
+TITLE = "Alias Maker Debug"
+INTRO = ("When Alias Maker crashes or hits an error, it saves a report here. Reports stay on "
+         "this PC: nothing is sent unless you share it. They never include what you typed in "
+         "the terminal, and private details are replaced with <user>, <hidden> and the like.")
+EMPTY = ("No crash reports. That's good!\n\n"
+         "If Alias Maker crashes or something goes wrong, a report shows up here by itself. "
+         "You don't need to type anything.\n\n"
+         "To check that the crash recorder works, click \"Test the Crash Recorder\".")
+
+
+def doit_path():
+    return os.path.join(SRC_DIR, "doit")
+
+
+def make_test_crash():
+    """Run doit --test-crash in its own process, so this app keeps running."""
+    try:
+        subprocess.run([sys.executable, doit_path(), "--test-crash"], capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+# ---------- text mode ----------
+
+def text_mode():
+    crash.collect_sudden_crashes()
+    print(f"{TITLE} (text mode)\n")
+    print(INTRO + "\n")
+    while True:
+        reports = crash.list_reports()
+        print(f"Crash reports: {len(reports)}")
+        print("  1) Show crash reports")
+        print("  2) Run the health check")
+        print("  3) Save everything for the developer (one file)")
+        print("  4) Test the crash recorder")
+        print("  q) Quit")
+        try:
+            choice = input("Pick one: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if choice in ("q", "quit", "exit", ""):
+            return 0
+        if choice == "1":
+            if not reports:
+                print("\n" + EMPTY.split("\n\n")[0] + "\n")
+                continue
+            for number, path in enumerate(reports, 1):
+                print(f"  {number}) {crash.report_title(path)}")
+            pick = input("Which one? (number, Enter to go back): ").strip()
+            if pick.isdigit() and 1 <= int(pick) <= len(reports):
+                print("\n" + reports[int(pick) - 1].read_text(errors="replace"))
+            crash.mark_seen()
+        elif choice == "2":
+            print("\n" + crash.health_text() + "\n")
+        elif choice == "3":
+            path = crash.save_for_sharing(crash.everything_text(), "alias-maker-debug")
+            print(f"\nSaved: {crash.scrub(str(path))}\nSend that file to the developer.\n")
+        elif choice == "4":
+            make_test_crash()
+            print("\nDone. A test report was added: pick 1 to see it.\n")
+
+
+# ---------- the window ----------
+
+def run_window():
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango
+
+    crash.set_versions(**{"PyGObject": gi.__version__,
+                          "GTK": f"{Gtk.get_major_version()}.{Gtk.get_minor_version()}."
+                                 f"{Gtk.get_micro_version()}"})
+
+    def label(text, css=None):
+        widget = Gtk.Label(label=text, xalign=0)
+        widget.set_wrap(True)
+        widget.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        if css:
+            widget.add_css_class(css)
+        return widget
+
+    def text_view():
+        view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True)
+        view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        for side in ("top", "bottom", "left", "right"):
+            getattr(view, f"set_{side}_margin")(10)
+        scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        scroller.set_child(view)
+        return view, scroller
+
+    def copy_text(widget, text):
+        clipboard = widget.get_clipboard()
+        try:
+            clipboard.set(text)
+        except (AttributeError, TypeError):
+            value = GObject.Value(GObject.TYPE_STRING, text)
+            clipboard.set_content(Gdk.ContentProvider.new_for_value(value))
+
+    def open_link(window, url):
+        try:
+            Gio.AppInfo.launch_default_for_uri(url, None)
+        except GLib.Error:
+            try:
+                subprocess.Popen(["xdg-open", url])
+            except OSError:
+                pass
+
+    class DebugWindow(Gtk.ApplicationWindow):
+        def __init__(self, app):
+            super().__init__(application=app, title=TITLE)
+            self.set_default_size(980, 620)
+            self.set_icon_name("dialog-warning")
+            self.reports = []
+            self.confirm_delete_all = False
+
+            stack = Gtk.Stack()
+            stack.add_titled(self.build_reports_page(), "reports", "Crash Reports")
+            stack.add_titled(self.build_health_page(), "health", "Health Check")
+            stack.connect("notify::visible-child-name", self.on_page)
+            switcher = Gtk.StackSwitcher(stack=stack)
+            header = Gtk.HeaderBar()
+            header.set_title_widget(switcher)
+            self.set_titlebar(header)
+            self.set_child(stack)
+            self.health_done = False
+            self.reload()
+
+        # --- Crash Reports ---
+
+        def build_reports_page(self):
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            for side in ("top", "bottom", "start", "end"):
+                getattr(box, f"set_margin_{side}")(12)
+            box.append(label(INTRO))
+
+            self.list = Gtk.ListBox()
+            self.list.set_selection_mode(Gtk.SelectionMode.SINGLE)
+            self.list.connect("row-selected", self.on_selected)
+            list_scroller = Gtk.ScrolledWindow(vexpand=True)
+            list_scroller.set_child(self.list)
+            list_scroller.set_size_request(330, -1)
+            self.view, view_scroller = text_view()
+            paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL, vexpand=True)
+            paned.set_start_child(list_scroller)
+            paned.set_end_child(view_scroller)
+            paned.set_position(340)
+            box.append(paned)
+
+            row = Gtk.Box(spacing=8)
+            buttons = [
+                ("Save Everything for the Developer", self.on_save_all, True),
+                ("Copy Report", self.on_copy, False),
+                ("Save Report", self.on_save, False),
+                ("Report on GitHub", self.on_github, False),
+                ("Delete", self.on_delete, False),
+            ]
+            self.report_buttons = []
+            for text, callback, main in buttons:
+                button = Gtk.Button(label=text)
+                if main:
+                    button.add_css_class("suggested-action")
+                else:
+                    self.report_buttons.append(button)
+                button.connect("clicked", lambda *_a, cb=callback: cb())
+                row.append(button)
+            spacer = Gtk.Box(hexpand=True)
+            row.append(spacer)
+            test = Gtk.Button(label="Test the Crash Recorder")
+            test.connect("clicked", lambda *_: self.on_test())
+            row.append(test)
+            self.delete_all_button = Gtk.Button(label="Delete All")
+            self.delete_all_button.connect("clicked", lambda *_: self.on_delete_all())
+            row.append(self.delete_all_button)
+            box.append(row)
+            self.status = label("", "dim-label")
+            box.append(self.status)
+            return box
+
+        def reload(self, select=None):
+            crash.collect_sudden_crashes()
+            self.reports = crash.list_reports()
+            child = self.list.get_first_child()
+            while child is not None:
+                self.list.remove(child)
+                child = self.list.get_first_child()
+            for path in self.reports:
+                item = Gtk.Label(label=crash.report_title(path), xalign=0)
+                item.set_ellipsize(Pango.EllipsizeMode.END)
+                item.set_tooltip_text(crash.report_title(path))
+                for side in ("top", "bottom", "start", "end"):
+                    getattr(item, f"set_margin_{side}")(6)
+                self.list.append(item)
+            self.delete_all_button.set_sensitive(bool(self.reports))
+            if self.reports:
+                index = self.reports.index(select) if select in self.reports else 0
+                self.list.select_row(self.list.get_row_at_index(index))
+            else:
+                self.on_selected(None, None)
+            crash.mark_seen()
+
+        def current(self):
+            row = self.list.get_selected_row()
+            if row is None or row.get_index() >= len(self.reports):
+                return None
+            return self.reports[row.get_index()]
+
+        def on_selected(self, _list, row):
+            path = self.current()
+            for button in self.report_buttons:
+                button.set_sensitive(path is not None)
+            try:
+                text = path.read_text(errors="replace") if path else EMPTY
+            except OSError as err:
+                text = f"This report couldn't be read ({err})."
+            self.view.get_buffer().set_text(text)
+
+        def say(self, text):
+            self.status.set_text(text)
+
+        def on_copy(self):
+            path = self.current()
+            if path:
+                copy_text(self, path.read_text(errors="replace"))
+                self.say("Copied. Paste it with Ctrl+V wherever you're talking to the developer.")
+
+        def on_save(self):
+            path = self.current()
+            if path:
+                saved = crash.save_for_sharing(path.read_text(errors="replace"), "alias-maker-report")
+                self.say(f"Saved: {crash.scrub(str(saved))}")
+
+        def on_save_all(self):
+            saved = crash.save_for_sharing(crash.everything_text(), "alias-maker-debug")
+            self.say(f"Saved everything (health check and all reports) to {crash.scrub(str(saved))}. "
+                     "Send that one file to the developer.")
+
+        def on_github(self):
+            path = self.current()
+            if path:
+                copy_text(self, path.read_text(errors="replace"))
+                title = crash.report_title(path).split("  ", 1)[-1][:120]
+                open_link(self, crash.issue_url(title))
+                self.say("Opened a new GitHub issue in your browser. The report is copied: "
+                         "paste it in with Ctrl+V.")
+
+        def on_delete(self):
+            path = self.current()
+            if path:
+                crash.delete_report(path)
+                self.reload()
+                self.say("Report deleted.")
+
+        def on_delete_all(self):
+            if not self.confirm_delete_all:
+                self.confirm_delete_all = True
+                self.delete_all_button.set_label("Click Again to Delete All")
+                GLib.timeout_add_seconds(4, self.reset_delete_all)
+                return
+            for path in crash.list_reports():
+                crash.delete_report(path)
+            self.reset_delete_all()
+            self.reload()
+            self.say("All reports deleted.")
+
+        def reset_delete_all(self):
+            self.confirm_delete_all = False
+            self.delete_all_button.set_label("Delete All")
+            return False
+
+        def on_test(self):
+            self.say("Making a test report...")
+            make_test_crash()
+            reports = crash.list_reports()
+            self.reload(select=reports[0] if reports else None)
+            self.say("Done. The test report is at the top of the list: the crash recorder works.")
+
+        # --- Health Check ---
+
+        def build_health_page(self):
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            for side in ("top", "bottom", "start", "end"):
+                getattr(box, f"set_margin_{side}")(12)
+            box.append(label("Checks that everything Alias Maker needs is installed and that its "
+                             "files are readable. Each problem says how to fix it."))
+            self.health_view, scroller = text_view()
+            box.append(scroller)
+            row = Gtk.Box(spacing=8)
+            for text, callback in (("Run Again", self.run_health), ("Copy", self.copy_health),
+                                   ("Save Everything for the Developer", self.on_save_all)):
+                button = Gtk.Button(label=text)
+                button.connect("clicked", lambda *_a, cb=callback: cb())
+                row.append(button)
+            box.append(row)
+            return box
+
+        def on_page(self, stack, _param):
+            if stack.get_visible_child_name() == "health" and not self.health_done:
+                self.run_health()
+
+        def run_health(self):
+            self.health_done = True
+            self.health_view.get_buffer().set_text("Checking...")
+
+            def work():
+                text = crash.health_text()
+                GLib.idle_add(lambda: self.health_view.get_buffer().set_text(text) and False)
+
+            import threading
+            threading.Thread(target=work, daemon=True).start()
+
+        def copy_health(self):
+            buffer = self.health_view.get_buffer()
+            copy_text(self, buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False))
+            self.say("Health check copied.")
+
+    class DebugApp(Gtk.Application):
+        def __init__(self):
+            super().__init__(application_id="io.github.thestylewithin.aliasmaker.debug",
+                             flags=Gio.ApplicationFlags.FLAGS_NONE)
+
+        def do_activate(self):
+            window = self.get_active_window() or DebugWindow(self)
+            window.present()
+
+    return DebugApp().run([sys.argv[0]])
+
+
+def main(argv):
+    if argv and argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+    if argv and argv[0] == "--version":
+        print(f"{TITLE} {crash.app_version()}")
+        return 0
+    crash.install("debug")
+    if argv and argv[0] == "--health":
+        print(crash.health_text())
+        return 0
+    if argv and argv[0] == "--save-all":
+        crash.collect_sudden_crashes()
+        path = crash.save_for_sharing(crash.everything_text(), "alias-maker-debug")
+        print(f"Saved: {crash.scrub(str(path))}\nSend that file to the developer.")
+        return 0
+    has_screen = os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")
+    if (argv and argv[0] == "--text") or not has_screen:
+        return text_mode()
+    try:
+        return run_window()
+    except (ImportError, ValueError) as err:
+        print(f"The window couldn't open ({err}), so here's text mode.\n")
+        return text_mode()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

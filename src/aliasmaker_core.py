@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"]}

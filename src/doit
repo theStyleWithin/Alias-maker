@@ -6,6 +6,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
+import aliasmaker_crash as crash  # noqa: E402
+
+if __name__ == "__main__":
+    # Errors are saved as crash reports. What was typed is hidden in them.
+    crash.install("doit", typed=[word for word in sys.argv[1:] if not word.startswith("--")])
+    if sys.argv[1:2] == ["--test-crash"]:  # Alias Maker Debug's "Test the Crash Recorder"
+        raise crash.TestCrash("A test crash, made on purpose to check that reports are saved.")
+
 from aliasmaker_core import main  # noqa: E402
 
 if __name__ == "__main__":

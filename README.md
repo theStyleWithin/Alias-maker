@@ -15,6 +15,8 @@ Custom Commands  ▸   Custom Command List
                      Delete Command
 Create Command
 Terminal Settings
+...
+Report a Problem     crash reports and a health check (Alias Maker Debug)
 ```
 
 ![The ☰ menu with Custom Commands open to the side](docs/mockups/menu.png)
@@ -66,10 +68,10 @@ The rest of the menu works like Konsole's: New Window, Copy, Paste, Full Screen,
 
 ## Install
 
-**The easy way: the installer.** Download the installer from the [packaging folder](packaging/) (open `alias-maker-<version>-installer.run` and click "Download raw file"), then in a terminal:
+**The easy way: the installer.** Download `alias-maker-<version>-installer.run` from the [Releases page](https://github.com/theStyleWithin/Alias-maker/releases) (under "Assets"; the newest is also in the [packaging folder](packaging/)), then in a terminal:
 
 ```
-bash ~/Downloads/alias-maker-0.6.0-installer.run
+bash ~/Downloads/alias-maker-0.7.0-installer.run
 ```
 
 It asks before doing anything, then:
@@ -79,7 +81,7 @@ It asks before doing anything, then:
 
 It asks for your password; run it as yourself, not with `sudo`. Afterwards, open **Alias Maker** from your app launcher, or type `aliasmaker`. To make it your default terminal: System Settings → Default Applications → Terminal emulator → Alias Maker.
 
-To uninstall: `bash alias-maker-0.6.0-installer.run --uninstall`, or `sudo pacman -R alias-maker`. Your own commands and settings (`~/.config/alias-maker`, `~/.local/share/alias-maker`) are kept either way.
+To uninstall: `bash alias-maker-0.7.0-installer.run --uninstall`, or `sudo pacman -R alias-maker`. Your own commands and settings (`~/.config/alias-maker`, `~/.local/share/alias-maker`) are kept either way.
 
 **From the source (for working on Alias Maker itself):**
 
@@ -93,6 +95,18 @@ cd Alias-maker
 `install.sh` runs Alias Maker straight from the cloned folder, for your user only. The repo is private, so `git clone` will ask you to sign in to GitHub. Don't use both ways at once: the `install.sh` copy in `~/.local/bin` would run instead of the installed one.
 
 **Making the installer:** `packaging/build-installer.sh` builds `alias-maker-<version>-installer.run` from the last commit, into `dist/` and the `packaging/` folder (replacing the older one there). It carries `packaging/arch/PKGBUILD` and the source, and runs `makepkg` on the user's PC.
+
+## For testers: Alias Maker Debug
+
+Alias Maker is being tested, so it comes with **Alias Maker Debug**, a separate small app that's always there: in your app launcher, in Alias Maker's ☰ menu as **Report a Problem**, or by typing `aliasmaker-debug`. It only needs GTK, not the terminal part, so it still opens when Alias Maker itself won't.
+
+- **Crash reports, made by themselves.** When Alias Maker crashes or hits an error, it saves a report: what went wrong, where in Alias Maker's code, the last few menu items used, and the PC's basics (Alias Maker version, OS, kernel, desktop, GTK and VTE versions). You don't type anything. Even sudden crashes (Alias Maker just vanishing) are caught: the next time it opens, it says so and the report is waiting. ☰ → Report a Problem shows how many reports are new.
+- **Private by design.** Reports never include anything typed or shown in the terminal. Before a report is saved, your user name, PC name, home folder, email addresses, IP addresses, passwords, long tokens and your own custom commands are replaced with `<user>`, `<pc>`, `~`, `<email>`, `<ip>`, `<hidden>` and `<your command>`. Reports stay on your PC (`~/.local/share/alias-maker/crashes/`), nothing is ever sent by itself, and you can read every word before sharing.
+- **Health check:** checks that everything Alias Maker needs is installed (Python, PyGObject, GTK 4, VTE, fish, fastfetch, manual pages) and that its files are readable, and says what to install to fix each problem.
+- **Sharing:** **Save Everything for the Developer** puts the health check and every report into one file in your Downloads folder, the one thing to send. Or Copy Report, Save Report, or **Report on GitHub** (opens a new issue with the report copied, ready to paste).
+- **Test the Crash Recorder** makes a harmless test report, to check that it all works.
+
+No desktop? `aliasmaker-debug --text` does the same in any terminal, and `aliasmaker-debug --save-all` saves the one file straight away.
 
 ## Inside the terminal
 
@@ -143,7 +157,7 @@ Alias Maker doesn't come with ready-made commands. These are examples to get you
 
 Practice safely: `doit --dry-run <phrase>` shows what would run without running it.
 
-To remove it: `rm ~/.local/bin/aliasmaker ~/.local/bin/doit ~/.local/share/applications/aliasmaker.desktop`. Your settings and custom commands live in `~/.config/alias-maker`, and the Database and log in `~/.local/share/alias-maker`.
+To remove an `install.sh` copy: `rm ~/.local/bin/aliasmaker ~/.local/bin/doit ~/.local/bin/aliasmaker-debug ~/.local/share/applications/aliasmaker.desktop ~/.local/share/applications/aliasmaker-debug.desktop`. Your settings and custom commands live in `~/.config/alias-maker`, and the Database and log in `~/.local/share/alias-maker`.
 
 Design notes and what's next: [docs/DESIGN.md](docs/DESIGN.md). Part of the [Do It OS](https://github.com/theStyleWithin/Doit-os) project.
 
