@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fills an AppDir with everything Alias Maker needs to run on a PC that has none of it:
-# Python, PyGObject, GTK 4 and VTE from this machine's Ubuntu 24.04 packages, plus fish from its
-# official static build (it needs no data folder; Ubuntu's fish 3.7 looks in /usr/share/fish). The PC
+# Python, PyGObject, GTK 4 and VTE from this machine's Ubuntu 24.04 packages. (The shell inside
+# the window is the PC's own: bash or fish. Nothing shell-like is bundled.) The PC
 # only has to provide what a desktop always has: the C library, the graphics stack (OpenGL,
 # X11/Wayland), fonts and fontconfig.
 #
@@ -11,7 +11,7 @@
 #   make-bundle.sh APPDIR
 #
 # Needs: python3-gi gir1.2-gtk-4.0 gir1.2-vte-3.91 librsvg2-common adwaita-icon-theme patchelf
-#        libglib2.0-bin libgdk-pixbuf2.0-bin libgtk-4-common shared-mime-info binutils xz-utils curl
+#        libglib2.0-bin libgdk-pixbuf2.0-bin libgtk-4-common shared-mime-info binutils
 set -euo pipefail
 
 dir="$(mkdir -p "$1" && realpath "$1")"
@@ -20,11 +20,6 @@ lib=/usr/lib/x86_64-linux-gnu
 gi_so=$(ls /usr/lib/python3/dist-packages/gi/_gi.cpython-3*-x86_64-linux-gnu.so | head -1)
 pyv=$(sed -E 's/.*cpython-3([0-9]+)-.*/3.\1/' <<<"$gi_so")
 mkdir -p "$dir/usr/bin" "$dir/usr/lib" "$dir/usr/share"
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-
-FISH_VERSION=4.9.3
-FISH_SHA256=8f643d10ad1abb0ef7072764c01ceb5cf61b2d373fda400cf60f0bad69b7e095
 
 # What the PC provides itself: never copied.
 EXCLUDE='^(ld-linux[^ ]*|linux-vdso[^ ]*|libc|libm|libdl|libpthread|librt|libutil|libresolv|libnsl|libanl|libBrokenLocale|libthread_db|libnss_[a-z]+)\.so'
@@ -76,13 +71,6 @@ cp "$lib"/girepository-1.0/*.typelib "$dir/usr/lib/girepository-1.0/"
 loaders_dir="$lib/gdk-pixbuf-2.0/2.10.0/loaders"
 mkdir -p "$dir/usr/lib/gdk-pixbuf-2.0/loaders"
 cp "$loaders_dir"/*.so "$dir/usr/lib/gdk-pixbuf-2.0/loaders/"
-
-# ---------- fish: the official static build, checked against a pinned checksum ----------
-curl -fsSL -o "$tmp/fish.tar.xz" \
-    "https://github.com/fish-shell/fish-shell/releases/download/$FISH_VERSION/fish-$FISH_VERSION-linux-x86_64.tar.xz"
-echo "$FISH_SHA256  $tmp/fish.tar.xz" | sha256sum -c - >/dev/null
-tar -xJf "$tmp/fish.tar.xz" -C "$tmp" fish
-install -m755 "$tmp/fish" "$dir/usr/bin/fish"
 
 # ---------- libraries ----------
 extra=()

@@ -39,9 +39,10 @@ class DoitTestCase(unittest.TestCase):
         self.env = mock.patch.dict(os.environ, {
             "HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
             "XDG_DATA_HOME": str(home / "data"), "DOIT_EXAMPLES": str(examples),
-            "NO_COLOR": "1", "PATH": str(self.programs),
+            "NO_COLOR": "1", "PATH": str(self.programs), "ALIASMAKER_SHELL": "/bin/sh",
         })
         self.env.start()
+        (home / "config" / "fish").mkdir(parents=True)  # fish is "in use": its shortcut file gets written
         os.environ.pop("DOIT_DRY_RUN", None)
 
     def tearDown(self):
@@ -592,7 +593,7 @@ class TestEditAndDelete(DoitTestCase):
         program.chmod(0o755)
         def snapshot():
             return {str(f): f.read_bytes() for f in self.home.rglob("*")  # Alias Maker's own two files aside
-                    if f.is_file() and f.name not in ("custom.json", "alias-maker.fish")}
+                    if f.is_file() and f.name not in ("custom.json", "alias-maker.fish", "shortcuts.bash")}
         before = snapshot()
         doit.save_custom_command("check drives", f"{program} -f", False)
         doit.remove_custom_command("check drives")
@@ -827,8 +828,9 @@ class TestRealTerminalCommands(DoitTestCase):
         saved = doit.CACHYOS_FISH_CONFIG
         doit.CACHYOS_FISH_CONFIG = str(fake_cachyos)
         try:
-            for name, why in (("lsblk", "a program on your PC"), ("cd", "a built-in fish command"),
-                              ("update", "a shortcut in your fish setup"), ("backup", "a shortcut in your fish setup")):
+            for name, why in (("lsblk", "a program on your PC"), ("cd", "a built-in bash command"),
+                              ("abbr", "a built-in fish command"),
+                              ("update", "a shortcut in your shell setup"), ("backup", "a shortcut in your shell setup")):
                 problem = doit.shell_name_problem(name)
                 self.assertEqual(problem[0], "taken", name)
                 self.assertIn(why, problem[1])
@@ -838,7 +840,7 @@ class TestRealTerminalCommands(DoitTestCase):
             self.assertIn("type it on its own: update2", out)
             doit.remove_custom_command("update")
             _, out, _ = self.run_doit(["create"], answers=["true", "update", "no", "yes"])
-            self.assertIn('"update" is already a shortcut in your fish setup', out)
+            self.assertIn('"update" is already a shortcut in your shell setup', out)
             self.assertIn('work as "doit update" only', out)
         finally:
             doit.CACHYOS_FISH_CONFIG = saved
@@ -869,10 +871,14 @@ class TestRealTerminalCommands(DoitTestCase):
         self.assertIn("set -g __aliasmaker_shortcut_names 'check-drives'\n", text)
 
     def test_create_says_where_the_shortcut_works(self):
-        os.environ["ALIASMAKER"], os.environ["SHELL"] = "1", "/usr/bin/fish"
-        self.assertIn("works right away", doit.where_shortcuts_work())
+        os.environ["ALIASMAKER"] = "1"
+        with mock.patch.object(doit, "shell_kind", return_value="fish"):
+            self.assertIn("works right away", doit.where_shortcuts_work())
+        with mock.patch.object(doit, "shell_kind", return_value="bash"):
+            self.assertIn("works in Alias Maker windows", doit.where_shortcuts_work())
         os.environ.pop("ALIASMAKER")
-        self.assertEqual(doit.where_shortcuts_work(), "(in a new terminal window)")
+        with mock.patch.object(doit, "shell_kind", return_value="fish"):
+            self.assertEqual(doit.where_shortcuts_work(), "(in a new terminal window)")
 
     def test_name_suggestions(self):
         self.assertEqual(doit.name_suggestions("just check my fucking drives"),

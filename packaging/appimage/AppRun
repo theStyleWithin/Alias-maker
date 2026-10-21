@@ -1,5 +1,5 @@
 #!/bin/bash
-# Starts Alias Maker from the AppImage, using the Python, GTK 4, VTE and fish inside it:
+# Starts Alias Maker from the AppImage, using the Python, GTK 4 and VTE inside it:
 # nothing has to be installed, and nothing is asked. There are no pop-ups here by design.
 #   ./Alias-Maker-x86_64.AppImage              the terminal window
 #   ./Alias-Maker-x86_64.AppImage doit ...     the doit command (one-word commands use this)
@@ -16,8 +16,7 @@ case "$1" in
     python) shift; prog=python ;;   # for debugging: the AppImage's own Python, set up like the app's
 esac
 
-# For the window: its own fish, and a doit that works without Python on the PC
-export ALIASMAKER_BUNDLED_FISH="$usr/bin/fish"
+# For the window: a doit that works without Python on the PC. The shell is the PC's own.
 export ALIASMAKER_DOIT_DIR="$usr/lib/alias-maker/bin"
 
 # doit needs none of GTK's settings (and passes its environment on to your own commands)

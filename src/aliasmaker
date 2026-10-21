@@ -67,6 +67,7 @@ DEBUG_APP = os.path.join(SRC_DIR, "aliasmaker-debug")
 APP_ID = "io.github.thestylewithin.aliasmaker"
 TERMINAL_NAME = "Let'sdostuff"  # what the title and prompt say instead of "fish": Let'sdostuff~
 FISH_TITLE_SCRIPT = os.path.join(SRC_DIR, "shell", "lets-do-stuff.fish")
+BASH_SETUP_SCRIPT = os.path.join(SRC_DIR, "shell", "lets-do-stuff.bash")
 
 # Spreadsheet look: a border around the table, bold headers, even padding in every cell.
 TABLE_CSS = """
@@ -79,26 +80,9 @@ columnview.aliasmaker-table > listview > row > cell { padding: 6px 10px; }
 # ---------- small helpers ----------
 
 def user_shell():
-    """The shell to start: the user's login shell, the same one Konsole would start.
-
-    From the AppImage, a login shell that isn't fish gets the AppImage's own fish instead, so
-    the Let'sdostuff~ prompt, /clippy and one-word commands work on any PC (bash on SteamOS and
-    Ubuntu). ALIASMAKER_SHELL=/path/to/shell picks a different one.
-    """
-    chosen = os.environ.get("ALIASMAKER_SHELL", "")
-    if chosen and os.access(chosen, os.X_OK):
-        return chosen
-    candidates = []
-    try:
-        candidates.append(pwd.getpwuid(os.getuid()).pw_shell)
-    except KeyError:
-        pass
-    candidates += [os.environ.get("SHELL", ""), "/bin/bash", "/bin/sh"]
-    shell = next((s for s in candidates if s and os.access(s, os.X_OK)), "/bin/sh")
-    bundled = os.environ.get("ALIASMAKER_BUNDLED_FISH", "")
-    if bundled and os.access(bundled, os.X_OK) and os.path.basename(shell) != "fish":
-        return bundled
-    return shell
+    """The shell to start: the PC's own, the same one Konsole would start (fish on CachyOS,
+    bash on SteamOS and Ubuntu). ALIASMAKER_SHELL=/path/to/shell picks a different one."""
+    return core.login_shell()
 
 
 def fish_quote(text):
@@ -107,9 +91,14 @@ def fish_quote(text):
 
 
 def shell_argv(shell):
-    """How to start the shell. Fish gets the Let'sdostuff~ title and prompt; others start as-is."""
-    if os.path.basename(shell) == "fish" and os.path.isfile(FISH_TITLE_SCRIPT):
+    """How to start the shell. It's still your own fish or bash underneath: only the prompt and
+    title say Let'sdostuff~ (plus /clippy, your one-word commands and the plain-words "not
+    found" messages). Other shells start as they are."""
+    kind = os.path.basename(shell)
+    if kind == "fish" and os.path.isfile(FISH_TITLE_SCRIPT):
         return [shell, "--init-command", f"source {fish_quote(FISH_TITLE_SCRIPT)}"]
+    if kind == "bash" and os.path.isfile(BASH_SETUP_SCRIPT):
+        return [shell, "--rcfile", BASH_SETUP_SCRIPT, "-i"]
     return [shell]
 
 
@@ -1537,7 +1526,7 @@ class AliasMakerApp(Gtk.Application):
     def do_activate(self):
         core.migrate_old_dirs()
         install_table_style()
-        core.write_fish_shortcuts()  # make sure the real terminal commands match the saved ones
+        core.write_shortcuts()  # make sure the real terminal commands match the saved ones
         self.new_window(self.workdir, self.command)
         if core.library_outdated():
             self.scanner.start()  # first run, or software was installed or removed since the scan
