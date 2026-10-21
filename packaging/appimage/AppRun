@@ -13,6 +13,7 @@ case "$1" in
     doit) shift; prog=doit ;;
     debug | aliasmaker-debug) shift; prog=aliasmaker-debug ;;
     aliasmaker) shift; prog=aliasmaker ;;
+    python) shift; prog=python ;;   # for debugging: the AppImage's own Python, set up like the app's
 esac
 
 # The window gives the shell inside it back what these were before (see crash.bundle_env_fixes),
@@ -55,4 +56,7 @@ fi
 export ALIASMAKER_BUNDLED_FISH="$usr/bin/fish"
 export ALIASMAKER_DOIT_DIR="$usr/lib/alias-maker/bin"
 
+if [ "$prog" = python ]; then
+    exec "$usr/bin/python3" "$@"
+fi
 exec "$usr/bin/python3" "$app/$prog" "$@"
