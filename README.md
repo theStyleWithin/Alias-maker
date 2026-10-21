@@ -83,6 +83,13 @@ It asks for your password; run it as yourself, not with `sudo`. Afterwards, open
 
 To uninstall: `bash alias-maker-installer.run --uninstall`, or `sudo pacman -R alias-maker`. Your own commands and settings (`~/.config/alias-maker`, `~/.local/share/alias-maker`) are kept either way.
 
+**Other ways,** all on the [Releases page](https://github.com/theStyleWithin/Alias-maker/releases) under "Assets":
+
+- **Ready-made package** for CachyOS / Arch: `sudo pacman -U ~/Downloads/alias-maker-<version>-1-any.pkg.tar.zst`
+- **AUR:** `paru -S alias-maker` or `yay -S alias-maker`, once it's published there (the release workflow keeps it up to date; see [Publishing](#publishing)).
+- **AppImage:** [Alias-Maker-x86_64.AppImage](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/Alias-Maker-x86_64.AppImage), nothing to install. It uses your PC's GTK 4 and VTE (CachyOS: `sudo pacman -S vte4 python-gobject`) and says what's missing if they aren't there. Make it runnable (right-click → Properties → Allow executing, or `chmod +x`), then double-click it. One-word commands you make in it keep working in other terminals as long as the AppImage file stays where it is.
+- **Alias Maker Debug as an AppImage:** [Alias-Maker-Debug-x86_64.AppImage](https://github.com/theStyleWithin/Alias-maker/releases/latest/download/Alias-Maker-Debug-x86_64.AppImage), for testers whose Alias Maker won't start at all. Without GTK it still saves the report and says where.
+
 **From the source (for working on Alias Maker itself):**
 
 ```
@@ -94,7 +101,11 @@ cd Alias-maker
 
 `install.sh` runs Alias Maker straight from the cloned folder, for your user only. Don't use both ways at once: the `install.sh` copy in `~/.local/bin` would run instead of the installed one.
 
-**Making the installer:** `packaging/build-installer.sh` builds `alias-maker-<version>-installer.run` from the last commit, into `dist/`. You don't need to run it to publish: when the version number in `src/aliasmaker_core.py` changes on `main`, the Release workflow (`.github/workflows/release.yml`) runs the tests, builds the installer and publishes a new release with it. The installer carries `packaging/arch/PKGBUILD` and the source, and runs `makepkg` on the user's PC.
+### Publishing
+
+To publish a version, change `VERSION` in `src/aliasmaker_core.py` on `main`. The Release workflow (`.github/workflows/release.yml`) then runs the tests, builds every package and publishes a release with all of them: the installer (`packaging/build-installer.sh`), the AppImages (`packaging/build-appimage.sh`), and the pacman package and AUR files (`packaging/build-arch.sh`, run in an Arch container). The installer carries `packaging/arch/PKGBUILD` and the source, and runs `makepkg` on the user's PC.
+
+**AUR, one-time setup:** make an account on [aur.archlinux.org](https://aur.archlinux.org), add an SSH public key to it (My Account → SSH Public Key), and add the matching private key to this repo as an Actions secret named `AUR_SSH_PRIVATE_KEY` (Settings → Secrets and variables → Actions). From then on every release also updates the `alias-maker` AUR package; the first release after that creates it.
 
 ## For testers: Alias Maker Debug
 
