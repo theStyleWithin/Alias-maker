@@ -728,6 +728,14 @@ class TestRealTerminalCommands(DoitTestCase):
         self.assertEqual([c["phrase"] for c in doit.load_custom()], ["check-drives"])
         self.assertIn("You can also type just: check-drives", out)
 
+    def test_from_an_appimage_shortcuts_run_the_appimage_file(self):
+        appimage = Path(self.tmp.name) / "Alias-Maker-x86_64.AppImage"
+        appimage.write_text("")
+        with mock.patch.dict(os.environ, {"APPIMAGE": str(appimage)}):
+            doit.save_custom_command("checkdrives", "lsblk -f", False)
+        self.assertIn(f"{doit.fish_quote(str(appimage))} 'doit' --alias 'checkdrives' -- $argv",
+                      self.shortcuts())
+
     def test_the_file_is_made_and_kept_in_step(self):
         doit.save_custom_command("checkdrives", "lsblk -f", False)
         doit.save_custom_command("check drives", "lsblk", False)

@@ -20,4 +20,8 @@ out="$dist/alias-maker-$version-installer.run"
 sed "s/@VERSION@/$version/g" "$here/installer-head.sh" > "$out"
 tar -czf - -C "$work" PKGBUILD "alias-maker-$version.tar.gz" >> "$out"
 chmod +x "$out"
+
+# The same source and PKGBUILD, for the pacman package and the AUR (see build-arch.sh).
+cp "$work/alias-maker-$version.tar.gz" "$dist/"
+cp "$work/PKGBUILD" "$dist/PKGBUILD"
 echo "$out  (commit $(git -C "$repo" rev-parse --short HEAD))"
