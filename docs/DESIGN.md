@@ -43,13 +43,13 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Yes-word settings (easy / strict / custom) | Built |
 | Custom commands (user picks their own phrases) | Built |
 | Create, Edit and Delete Command (delete removes the alias only) | Built |
-| Spreadsheet-style tables for the Database and Custom Command List | Built, untested on real hardware |
-| Tables open in their own window and build up gradually | Built, untested on real hardware |
+| Spreadsheet-style tables for the Database and Custom Command List | Built; works on Ubuntu 24.04 (GTK 4.14, VTE 0.76), untested on CachyOS |
+| Tables open in their own window and build up gradually | Built; works on Ubuntu 24.04 (GTK 4.14, VTE 0.76), untested on CachyOS |
 | Edit Custom Commands directly in the table (Database stays read-only) | Built, untested on real hardware |
-| Title and prompt say Let'sdostuff~ instead of fish ~ (fish only) | Built, untested on real hardware |
+| Title and prompt say Let'sdostuff~ instead of fish ~ (fish only) | Built; works on Ubuntu 24.04 (GTK 4.14, VTE 0.76), untested on CachyOS |
 | /clippy lookups: CachyOS wiki, Arch Wiki (best effort), manual pages | Built; tested against a stand-in wiki and with real fish 4.0, untested against the real sites |
 | Database: scan of every program on this PC, with search | Built |
-| Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built, untested on real hardware |
+| Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built; works on Ubuntu 24.04 (GTK 4.14, VTE 0.76), untested on CachyOS |
 | Konsole-style menu items and shortcuts (New Window, Copy, Paste, Full Screen, font size) | Built, untested on real hardware |
 | Text menu (`doit menu`), terminal search (`doit search`), `doit my commands`, `doit rescan` | Removed: the window's ☰ menu and Database replace them |
 | Terminal Settings in the ☰ menu: command log switch, Command Log table, yes word | Built, untested on real hardware |
@@ -61,7 +61,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Automatic rescan whenever pacman installs something | Later (needs a one-time admin setup) |
 | Bare phrases without the `doit` prefix | Later, optional |
 
-Tested in a Linux sandbox only so far, not yet on CachyOS; the fish parts were tested with real fish 4.0. There are 91 automated tests (78 for the engine, 13 for the crash recorder and Alias Maker Debug); the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (122 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
+Not yet tested on CachyOS. The window has been run for real on Ubuntu 24.04 (GTK 4.14, VTE 0.76, fish 3.7) on a virtual screen: it opens, shows the DOIT welcome and the Let'sdostuff~ prompt, runs `doit` phrases and one-word commands, turns `/clippy` into `doit clippy`, opens the ☰ menu and the Database window (search "drives" puts `lsblk` first), and Alias Maker Debug saves a scrubbed report after a test crash. Editing table cells, Terminal Settings, the Command Log and the keyboard shortcuts weren't clicked through yet. The fish parts were also tested with real fish 4.0. There are 91 automated tests (78 for the engine, 13 for the crash recorder and Alias Maker Debug); the scanner's manual and pacman lookups were tested with stand-ins that print the same format as the real tools. The window couldn't be opened in the sandbox (no GTK or VTE there), so its logic was checked headless with stand-in GTK widgets (122 checks) and its GTK and VTE calls were reviewed by hand. The least certain part is how the shell is started (`spawn_async`), because Python's VTE bindings have changed shape between versions; the code tries both known forms.
 
 ## Alias Maker Debug and crash reports
 
