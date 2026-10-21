@@ -168,6 +168,23 @@ class TestAIWindow(AITestCase):
         saved = doit.ai_load()
         self.assertEqual((saved["key"], saved["base_url"]), ("sk-mystery-key-1", self.ai.base + "/v1"))
 
+    def test_free_models_are_listed_first_and_labelled(self):
+        self.ai.model_items = [{"id": "paid-one", "pricing": {"prompt": "1", "completion": "1"}},
+                               {"id": "free-one:free"}]
+        self.win.key.set_text("sk-mystery-key-1")
+        self.win.check_key()
+        self.win.provider_pick.set_selected(2)
+        self.win.address.set_text(self.ai.base + "/v1")
+        self.win.check_key()
+        self.assertTrue(self.spin(lambda: not self.win.checking))
+        self.assertEqual(self.win.models, ["free-one:free", "paid-one"])
+        self.assertEqual(doit.ai_load()["model"], "free-one:free", "a free model is the first pick")
+        labels = [self.win.model.get_model().get_string(i) for i in range(2)]
+        self.assertTrue(labels[0].endswith("free"), labels[0])
+        self.assertIn("paid: $1,000,000.00 in / $1,000,000.00 out per million tokens", labels[1])
+        self.win.model.set_selected(1)
+        self.assertEqual(doit.ai_load()["model"], "paid-one")
+
     def test_the_chat_button_types_doit_ai_into_the_terminal(self):
         self.check_with(CLAUDE_KEY)
         self.win.chat.emit("clicked")

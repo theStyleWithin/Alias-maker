@@ -27,6 +27,7 @@ class FakeAI:
         self.status = 200
         self.reply = "Try the unzip command."
         self.garbage = False
+        self.model_items = None  # full model entries (with prices), if a test wants them
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -40,7 +41,8 @@ class FakeAI:
                 elif outer.status != 200:
                     data = b'{"error": "nope"}'
                 elif self.path.split("?")[0].endswith("/models"):
-                    data = json.dumps({"data": [{"id": m} for m in outer.models]}).encode()
+                    items = outer.model_items if outer.model_items is not None else [{"id": m} for m in outer.models]
+                    data = json.dumps({"data": items}).encode()
                 elif self.path.split("?")[0].endswith("/messages"):
                     data = json.dumps({"content": [{"type": "text", "text": outer.reply}]}).encode()
                 else:
@@ -583,6 +585,172 @@ class TestOtherServices(AITestCase):
 
     def test_a_key_that_looks_like_neither_built_in_service_is_not_guessed(self):
         self.assertIsNone(doit.ai_provider_for_key("sk-s78AoQ391Tc4IGNWrnFUMQ3vBV"))
+
+
+class TestSwapModel(AITestCase):
+    """/swapai: change the model from the service's own list, free ones first. Names must be exact."""
+
+    ITEMS = [{"id": "big-paid-model", "pricing": {"prompt": "0.000003", "completion": "0.000015"}},
+             {"id": "tiny-free-model", "pricing": {"prompt": "0", "completion": "0"}},
+             {"id": "llama-3-8b:free"},
+             {"id": "llama-3-70b"},
+             {"id": "no-price-info"}]
+
+    def setUp(self):
+        super().setUp()
+        self.ai.model_items = self.ITEMS
+        doit.ai_save({"provider": "custom", "key": "sk-whatever-123456", "enabled": True,
+                      "base_url": self.ai.base + "/v1", "model": "big-paid-model", "notice_seen": True})
+
+    def model(self):
+        return doit.ai_load()["model"]
+
+    def test_free_models_come_first_and_each_line_says_free_paid_or_price_not_listed(self):
+        _, out, prompts = self.run_doit(["/swapai"], answers=[""])
+        lines = [l.strip() for l in out.splitlines() if ") " in l]
+        self.assertEqual([l.split(") ")[1].split(" ")[0] for l in lines],
+                         ["tiny-free-model", "llama-3-8b:free", "big-paid-model", "llama-3-70b", "no-price-info"])
+        by_name = {l.split(") ")[1].split(" ")[0]: l for l in lines}
+        self.assertIn("free", by_name["tiny-free-model"])
+        self.assertNotIn("paid", by_name["tiny-free-model"])
+        self.assertIn("free", by_name["llama-3-8b:free"])
+        self.assertIn("paid: $3.00 in / $15.00 out per million tokens", by_name["big-paid-model"])
+        self.assertIn("(current)", by_name["big-paid-model"])
+        for name in ("llama-3-70b", "no-price-info"):
+            self.assertIn("price not listed (may cost)", by_name[name], "no price info is not a promise of free")
+            self.assertNotIn("free", by_name[name].replace("price not listed", ""))
+        self.assertIn("Models on 127.0.0.1:", out)
+        self.assertIn("Models the service lists as free come first.", out)
+        self.assertEqual(self.model(), "big-paid-model", "Enter keeps the current one")
+
+    def test_a_number_picks_a_model(self):
+        _, out, prompts = self.run_doit(["/swapai"], answers=["2"])
+        self.assertEqual(self.model(), "llama-3-8b:free")
+        self.assertIn("Now using llama-3-8b:free (free).", out)
+        self.assertTrue(prompts[0].startswith("Type a number or the exact model name"))
+        self.run_doit(["/swapai"], answers=["3"])
+        self.assertEqual(self.model(), "big-paid-model")
+        _, out, _ = self.run_doit(["/swapai", "llama-3-70b"])
+        self.assertIn("Now using llama-3-70b (price not listed (may cost)).", out)
+
+    def test_prices_are_read_carefully(self):
+        self.assertEqual(doit.ai_price_per_million("0.000003"), 3.0)
+        self.assertEqual(doit.ai_price_per_million("0"), 0)
+        for odd in ("", None, "free", "-1", "n/a"):
+            self.assertIsNone(doit.ai_price_per_million(odd), odd)
+        self.ai.model_items = [
+            {"id": "half", "pricing": {"prompt": "0", "completion": "0.000002"}},
+            {"id": "text-price", "pricing": {"prompt": "cheap", "completion": "cheap"}},
+            {"id": "only-one-side", "pricing": {"prompt": "0.000001"}},
+            {"id": "zero-both", "pricing": {"prompt": "0.0", "completion": "0.00"}}]
+        entries = {e["id"]: e for e in doit.ai_model_entries(doit.ai_load())}
+        self.assertFalse(entries["half"]["free"])
+        self.assertEqual(entries["half"]["price"], "$0.00 in / $2.00 out per million tokens")
+        self.assertEqual(doit.ai_cost_label(entries["text-price"]), "price not listed (may cost)")
+        self.assertEqual(doit.ai_cost_label(entries["only-one-side"]), "price not listed (may cost)")
+        self.assertEqual(doit.ai_cost_label(entries["zero-both"]), "free")
+
+    def test_the_exact_name_works_and_takes_the_services_own_spelling(self):
+        _, out, prompts = self.run_doit(["/swapai", "llama-3-70b"])
+        self.assertEqual(self.model(), "llama-3-70b")
+        self.assertEqual(prompts, [], "an exact name needs no questions")
+        self.run_doit(["swapai", "TINY-FREE-MODEL"])
+        self.assertEqual(self.model(), "tiny-free-model")
+
+    def test_a_name_that_is_not_in_the_list_is_never_applied(self):
+        _, out, _ = self.run_doit(["/swapai", "tiny-free-modle"], answers=[])
+        self.assertEqual(self.model(), "big-paid-model")
+        self.assertIn('no model called "tiny-free-modle"', out)
+        self.assertIn("nothing was changed", out)
+        self.assertIn("Close ones: tiny-free-model", out)
+        _, out, _ = self.run_doit(["/swapai"], answers=["99"])
+        self.assertIn("nothing was changed", out)
+        _, out, _ = self.run_doit(["/swapai"], answers=["made-up-name"])
+        self.assertEqual(self.model(), "big-paid-model")
+
+    def test_a_part_of_a_name_narrows_the_list_and_still_asks(self):
+        _, out, prompts = self.run_doit(["/swapai", "llama"], answers=[""])
+        self.assertIn("1) llama-3-8b:free", out)
+        self.assertIn("2) llama-3-70b", out)
+        self.assertNotIn("3)", out, "only the matches are listed")
+        self.assertEqual(self.model(), "big-paid-model", "a part of a name is never guessed into a choice")
+        self.run_doit(["/swapai", "70b"], answers=["1"])
+        self.assertEqual(self.model(), "llama-3-70b")
+
+    def test_a_long_list_is_cut_with_a_hint(self):
+        self.ai.model_items = [{"id": f"model-{n:03d}"} for n in range(60)]
+        _, out, _ = self.run_doit(["/swapai"], answers=[""])
+        self.assertIn(f"{doit.AI_LIST_LIMIT}) model-039", out)
+        self.assertNotIn("41) model-040", out)
+        self.assertIn("...and 20 more", out)
+        self.run_doit(["/swapai", "model-055"])
+        self.assertEqual(self.model(), "model-055", "an exact name beyond the first page works")
+
+    def test_without_a_terminal_it_only_lists_unless_given_a_name(self):
+        _, out, prompts = self.run_doit(["/swapai"], tty=False)
+        self.assertEqual(prompts, [])
+        self.assertIn("1) tiny-free-model", out)
+        self.assertEqual(self.model(), "big-paid-model")
+        self.run_doit(["/swapai", "llama-3-70b"], tty=False)
+        self.assertEqual(self.model(), "llama-3-70b")
+
+    def test_problems_are_explained_and_nothing_changes(self):
+        self.ai.status = 401
+        _, out, _ = self.run_doit(["/swapai"], answers=[])
+        self.assertIn("didn't accept that key", out)
+        self.assertEqual(self.model(), "big-paid-model")
+        self.ai.status = 200
+        self.ai.model_items = []
+        _, out, _ = self.run_doit(["/swapai"], answers=[])
+        self.assertIn("didn't list any models", out)
+
+    def test_no_key_says_where_to_start(self):
+        doit.ai_forget()
+        code, out, _ = self.run_doit(["/swapai"])
+        self.assertEqual(code, 1)
+        self.assertIn("no key yet", out)
+        self.assertEqual(self.ai.requests, [])
+
+    def test_it_also_works_as_doit_ai_model_and_slash_ai_model(self):
+        self.run_doit(["ai", "model", "llama-3-70b"])
+        self.assertEqual(self.model(), "llama-3-70b")
+        self.run_doit(["/ai", "model", "tiny-free-model"])
+        self.assertEqual(self.model(), "tiny-free-model")
+
+    def test_the_first_pick_on_another_service_is_a_free_model(self):
+        config = {"provider": "custom", "key": "sk-x", "base_url": self.ai.base + "/v1"}
+        entries, chosen = doit.ai_check_full(config)
+        self.assertEqual(chosen, "tiny-free-model")
+        self.assertEqual([e["id"] for e in entries][:2], ["tiny-free-model", "llama-3-8b:free"])
+        self.ai.model_items = [{"id": "only-paid", "pricing": {"prompt": "1", "completion": "1"}}]
+        self.assertEqual(doit.ai_check_full(config)[1], "only-paid")
+        _, chosen = doit.ai_check({**config, "model": "only-paid"})
+        self.assertEqual(chosen, "only-paid", "a model already chosen stays")
+
+    def test_built_in_services_keep_their_usual_default(self):
+        self.ai.model_items = None
+        _, chosen = doit.ai_check({"provider": "claude", "key": CLAUDE_KEY})
+        self.assertEqual(chosen, "claude-sonnet-5-5")
+
+    def test_swapai_is_one_of_alias_makers_own_words(self):
+        self.assertEqual(doit.phrase_problem("swapai", {})[0], "reserved")
+
+    def test_you_can_change_model_in_the_middle_of_a_chat(self):
+        doit.ai_save({**doit.ai_load(), "model": "big-paid-model"})
+        _, out, prompts = self.run_doit(
+            ["ai"], answers=["first question", "/swapai llama-3-70b", "second question", "/model tiny-free-model", "/bye"])
+        posts = [r["body"] for r in self.ai.requests if r["method"] == "POST"]
+        self.assertEqual([p["model"] for p in posts], ["big-paid-model", "llama-3-70b"])
+        self.assertEqual([m["content"] for m in posts[1]["messages"] if m["role"] == "user"],
+                         ["first question", "second question"], "the conversation is kept")
+        self.assertIn("Now using llama-3-70b (price not listed (may cost)).", out)
+        self.assertIn("Now using tiny-free-model (free).", out)
+        self.assertNotIn("That looks like a terminal command", out)
+        self.assertEqual(self.model(), "tiny-free-model")
+
+    def test_the_chat_banner_mentions_it(self):
+        _, out, _ = self.run_doit(["ai"], answers=["/bye"])
+        self.assertIn("Change the AI model any time with /swapai.", out)
 
 
 class TestSetupAndSettings(AITestCase):

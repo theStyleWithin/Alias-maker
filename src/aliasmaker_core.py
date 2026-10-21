@@ -1462,6 +1462,7 @@ def read_manual_page(name):
 # anything. Nothing it says is run. The conversation lives in memory and is gone when the chat ends.
 
 AI_WORD = "ai"
+SWAP_WORD = "swapai"  # /swapai: change the AI model
 AI_FILE_NAME = "ai.json"
 AI_PROVIDERS = {
     "claude": {"name": "Claude", "company": "Anthropic", "base": "https://api.anthropic.com",
@@ -1603,11 +1604,50 @@ def ai_request(config, method, path, body=None, timeout=60):
         raise AIError("The AI service sent something I couldn't read. Try again.") from None
 
 
-def ai_models(config):
-    """The models this key can use, as names (newest first as the service lists them)."""
+def ai_price_per_million(value):
+    """A price the service lists per token ("0.000003") as dollars per million tokens (3.0), or None."""
+    try:
+        number = float(str(value).strip())
+    except ValueError:
+        return None
+    return number * 1_000_000 if number >= 0 else None
+
+
+def ai_cost_label(entry):
+    """What to say about a model's cost, only as far as the service's own list says: free, paid with
+    its price, or that the price isn't listed."""
+    if entry.get("free"):
+        return "free"
+    if entry.get("price"):
+        return "paid: " + entry["price"]
+    return "price not listed (may cost)"
+
+
+def ai_model_entries(config):
+    """The models this key can use, as the service lists them: [{"id", "free", "price"}]. "free" is
+    only true when the service's list says so (a zero price, or an id ending in :free). "price" is
+    text like "$3.00 in / $15.00 out per million tokens" when the list gives non-zero prices."""
     path = {"claude": "/v1/models?limit=100", "grok": "/v1/models", "custom": "/models"}[config["provider"]]
     answer = ai_request(config, "GET", path, timeout=20)
-    return [str(m["id"]) for m in answer.get("data", []) if isinstance(m, dict) and m.get("id")]
+    entries = []
+    for model in answer.get("data", []):
+        if not (isinstance(model, dict) and model.get("id")):
+            continue
+        pricing = model.get("pricing") if isinstance(model.get("pricing"), dict) else {}
+        prompt = ai_price_per_million(pricing.get("prompt")) if "prompt" in pricing else None
+        completion = ai_price_per_million(pricing.get("completion")) if "completion" in pricing else None
+        free = prompt == 0 and completion == 0
+        price = None
+        if not free and prompt is not None and completion is not None:
+            price = f"${prompt:,.2f} in / ${completion:,.2f} out per million tokens"
+        entries.append({"id": str(model["id"]), "free": free or str(model["id"]).endswith(":free"),
+                        "price": price})
+    return entries
+
+
+def ai_models(config):
+    """The models this key can use, as names (newest first as the service lists them)."""
+    return [entry["id"] for entry in ai_model_entries(config)]
 
 
 def ai_default_model(provider, models):
@@ -1624,13 +1664,96 @@ def ai_default_model(provider, models):
     return models[0] if models else ""
 
 
-def ai_check(config):
-    """Test a key. Returns (models, chosen model). Raises AIError."""
-    models = ai_models(config)
-    if not models:
+def ai_free_first(entries):
+    """The service's models with the ones it lists as free first (otherwise in its own order)."""
+    return sorted(entries, key=lambda entry: not entry["free"])
+
+
+def ai_check_full(config):
+    """Test a key. Returns (models, chosen model): models are [{"id", "free"}], free ones first.
+    On another service the first pick is a free model if it lists any, so nothing costs by surprise.
+    Raises AIError."""
+    entries = ai_free_first(ai_model_entries(config))
+    if not entries:
         raise AIError("The key works, but no AI models are available to it.")
-    chosen = config.get("model") if config.get("model") in models else ai_default_model(config["provider"], models)
-    return models, chosen
+    ids = [entry["id"] for entry in entries]
+    free = [entry["id"] for entry in entries if entry["free"]]
+    if config.get("model") in ids:
+        chosen = config["model"]
+    else:
+        chosen = ai_default_model(config["provider"], free if (config["provider"] == "custom" and free) else ids)
+    return entries, chosen
+
+
+def ai_check(config):
+    """Test a key. Returns (model names, chosen model). Raises AIError."""
+    entries, chosen = ai_check_full(config)
+    return [entry["id"] for entry in entries], chosen
+
+
+AI_LIST_LIMIT = 40
+
+
+def ai_pick_model(config, wanted="", say=print):
+    """/swapai: change the model for the service in use. Model names must be exact, so this reads the
+    service's own list: a number or the exact name picks one, a part of a name narrows the list, and
+    nothing is applied that isn't in the list. Returns the new model name, or None if unchanged."""
+    try:
+        entries = ai_model_entries(config)
+    except AIError as error:
+        say(str(error))
+        return None
+    entries = ai_free_first(entries)
+    ids = [entry["id"] for entry in entries]
+    free = {entry["id"] for entry in entries if entry["free"]}
+    costs = {entry["id"]: ai_cost_label(entry) for entry in entries}
+    if not ids:
+        say("The service didn't list any models for this key.")
+        return None
+    wanted = wanted.strip()
+    chosen = None
+    shown = ids
+    if wanted:
+        exact = [i for i in ids if i == wanted] or [i for i in ids if i.lower() == wanted.lower()]
+        if exact:
+            chosen = exact[0]
+        else:
+            shown = [i for i in ids if wanted.lower() in i.lower()]
+            if not shown:
+                close = difflib.get_close_matches(wanted, ids, n=3, cutoff=0.5)
+                say(f'There\'s no model called "{wanted}" on {ai_info(config)["name"]}, so nothing was changed.')
+                if close:
+                    say("Close ones: " + ", ".join(close))
+                say("See the whole list with: /swapai")
+                return None
+    if chosen is None:
+        current = config.get("model")
+        if free & set(shown):
+            say("Models the service lists as free come first.")
+        say(f"Models on {ai_info(config)['name']}:")
+        width = max(len(model) for model in shown[:AI_LIST_LIMIT])
+        for number, model in enumerate(shown[:AI_LIST_LIMIT], 1):
+            say(f"  {number}) {model.ljust(width)}   {costs[model]}" + ("   (current)" if model == current else ""))
+        if len(shown) > AI_LIST_LIMIT:
+            say(f"  ...and {len(shown) - AI_LIST_LIMIT} more. Narrow it down with a part of the name: /swapai <part of a name>")
+        if not interactive():
+            return None
+        answer = (ask("Type a number or the exact model name (Enter keeps the current one): ") or "").strip()
+        if not answer:
+            say("Okay, keeping " + str(current))
+            return None
+        if answer.isdigit() and 1 <= int(answer) <= min(len(shown), AI_LIST_LIMIT):
+            chosen = shown[int(answer) - 1]
+        else:
+            exact = [i for i in ids if i == answer] or [i for i in ids if i.lower() == answer.lower()]
+            if not exact:
+                say("That isn't one of the models listed, so nothing was changed.")
+                return None
+            chosen = exact[0]
+    config["model"] = chosen
+    ai_save(config)
+    say(f"Now using {chosen} ({costs[chosen]}).")
+    return chosen
 
 
 def ai_system_prompt():
@@ -1769,7 +1892,8 @@ def looks_like_command(text, state):
 def show_chat_banner(info, model):
     lines = [f"AI CHAT with {info['name']}  \u00b7  you are NOT at your terminal prompt",
              "Everything you type here is just a message. Nothing runs as a command,",
-             "and nothing the AI writes is ever run. Type /bye to go back to your terminal."]
+             "and nothing the AI writes is ever run. Type /bye to go back to your terminal.",
+             "Change the AI model any time with /swapai."]
     width = max(len(line) for line in lines) + 2
     print(paint("\u256d" + "\u2500" * width + "\u256e", "1;35"))
     for number, line in enumerate(lines):
@@ -1838,6 +1962,12 @@ def ai_chat(first_message=""):
                     continue
             if normalize(text) in AI_QUIT_WORDS:
                 return 0
+            first = text.split(None, 1)
+            if first[0].lower() in ("/" + SWAP_WORD, "/model"):  # change model without leaving the chat
+                ai_pick_model(config, first[1] if len(first) > 1 else "")
+                print(f"(Chatting with {config.get('model')}. Your conversation so far is kept.)\n")
+                text = ""
+                continue
             if looks_like_command(text, state):
                 print(paint("That looks like a terminal command. Nothing runs in this chat.", "1;33"))
                 answer = ask(f"Want the AI to explain what it does? (type {yes_hint(state.settings)}; "
@@ -1929,6 +2059,14 @@ def ai_command(state, arg):
         config["enabled"] = word == "on"
         ai_save(config)
         print(f"The AI helper is now {word}.")
+        return 0
+    if word.split()[:1] == ["model"]:
+        config = ai_load()
+        if not (config.get("key") and config.get("provider") in AI_PROVIDERS):
+            print("There's no key yet. Set one up first: ☰ → AI, or doit ai setup")
+            return 1
+        rest = arg.strip()[len("model"):].strip() if arg.strip().lower().startswith("model") else ""
+        ai_pick_model(config, rest)
         return 0
     if word == "status":
         config = ai_load()
@@ -2167,6 +2305,8 @@ def match_builtin(norm):
         return ("clippy", " ".join(words[1:]))
     if words[0] in (AI_WORD, "/" + AI_WORD):
         return ("ai", " ".join(words[1:]))
+    if words[0] in (SWAP_WORD, "/" + SWAP_WORD):
+        return ("ai", " ".join(["model"] + words[1:]))
     if words[0] in ("forget", "delete"):
         return ("forget", " ".join(words[1:]))
     if len(words) == 2 and words[0] == "logging" and words[1] in ("on", "off"):
@@ -2236,6 +2376,7 @@ def show_help(examples):
             ("doit forget <phrase>", "delete one of your commands (also: doit delete)"),
             ("/clippy <topic>", "look a topic up instead of running it (also: doit clippy)"),
             ("/ai or doit ai", "chat with an AI helper, if you set one up (☰ → AI)"),
+            ("/swapai", "change which AI model it uses (a list to pick from)"),
             ("doit show me what you did", "your command history, if the log is on"),
             ("doit logging on / off", "turn the command log on or off"),
             ("doit answer easy / strict", "say yes with y or yes, or only with yes"),
@@ -2589,7 +2730,8 @@ def handle(text, state):
     if builtin:
         if builtin[0] == "ai":  # the AI gets your words exactly as typed (capitals matter in file names)
             parts = text.split(None, 1)
-            builtin = ("ai", parts[1].strip() if len(parts) > 1 else "")
+            rest = parts[1].strip() if len(parts) > 1 else ""
+            builtin = ("ai", ("model " + rest).strip() if parts[0].lstrip("/").lower() == SWAP_WORD else rest)
         return run_builtin(*builtin, state)
     custom = state.custom_map.get(norm)
     if custom is None and re.search(r"[-_]", norm):  # check-my-drives: dashes typed for spaces

@@ -1573,9 +1573,13 @@ class AIWindow(Gtk.Window):
         self.confirm_forget = False
         self.loading = False
 
-    def set_models(self, models, chosen):
+    def set_models(self, models, chosen, costs=None):
+        """models: names (the service's free ones first). costs: what the service's list says about each
+        one's cost (free, paid with a price, or price not listed)."""
         self.models = list(models)
-        self.model.set_model(Gtk.StringList.new(self.models or ["(check the key to see models)"]))
+        costs = costs or {}
+        labels = [name + (f"   {costs[name]}" if name in costs else "") for name in self.models]
+        self.model.set_model(Gtk.StringList.new(labels or ["(check the key to see models)"]))
         self.model.set_sensitive(bool(self.models))
         if chosen in self.models:
             self.model.set_selected(self.models.index(chosen))
@@ -1654,15 +1658,15 @@ class AIWindow(Gtk.Window):
 
         def work():
             try:
-                models, chosen = core.ai_check(config)
+                entries, chosen = core.ai_check_full(config)
                 error = None
             except core.AIError as err:
-                models, chosen, error = [], None, str(err)
-            GLib.idle_add(self.checked, config, models, chosen, error)
+                entries, chosen, error = [], None, str(err)
+            GLib.idle_add(self.checked, config, entries, chosen, error)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def checked(self, config, models, chosen, error):
+    def checked(self, config, entries, chosen, error):
         self.checking = False
         self.check.set_sensitive(True)
         if error:
@@ -1672,7 +1676,7 @@ class AIWindow(Gtk.Window):
         config.setdefault("enabled", True)
         core.ai_save(config)
         self.reload()
-        self.set_models(models, chosen)
+        self.set_models([e["id"] for e in entries], chosen, {e["id"]: core.ai_cost_label(e) for e in entries})
         self.say(f"The key works. Using {chosen}. You can pick another model below.", "success")
         return False
 
