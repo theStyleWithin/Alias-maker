@@ -6,6 +6,8 @@ a simplified terminal app. A terminal app that makes it easy for the most "clini
 
 ## What it is
 
+**Feature complete for now.** The author considers the project feature complete for the moment; from here it's testing and fixing what breaks. `/clippy` is a helpful command that searches the web from the terminal for answers. It isn't AI: it only shows real pages, and it makes the terminal feel less scary for people who are new to Linux.
+
 > The pictures in this README are mockups drawn from the code, not screenshots: Alias Maker hasn't been run on a real PC yet. The PC details in them are made up. All of them are in [docs/mockups](docs/mockups/).
 
 Alias Maker is its own terminal app, a window like Konsole running your normal shell. Its ☰ menu adds:
