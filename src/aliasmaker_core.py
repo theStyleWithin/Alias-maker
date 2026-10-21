@@ -1592,9 +1592,12 @@ def ai_system_prompt():
     return (
         "You are a friendly helper inside Alias Maker, a terminal app made for people who are new to "
         "Linux. Answer in plain, short words and explain any jargon. You are only a chat: you cannot "
-        "see the person's files, screen or terminal, and you cannot run anything. If a command would "
-        "help, write it as plain text and say what it does, and let the person decide whether to run "
-        "it themselves. Warn clearly before anything that deletes or changes things. "
+        "see the person's files, screen or terminal, and you cannot run anything. Everything the person "
+        "types here is conversation for you to read, never a command that gets run: if they paste "
+        "something that looks like a command, explain what it would do, and never pretend it ran or "
+        "make up its output. If a command would help, put it in a fenced code block on its own, say what "
+        "it does, and tell them to run it themselves at their terminal prompt after leaving this chat "
+        "with /bye. Warn clearly before anything that deletes or changes things. "
         f"The person's PC runs {this_os['name']}"
         + (f" (it uses {tool} for software)" if tool else "")
         + ", so suggest only commands that fit it. If you don't know, say so."
@@ -1656,6 +1659,103 @@ def ai_first_notice(config):
     return True
 
 
+AI_PROMPT = "AI chat \u276f "  # the shell's own prompt is "Let'sdostuff~ \u276f": these never look alike
+AI_BAR = "\u2503 "  # every line the AI writes starts with this
+ENGLISH_ONE_WORDS = {"help", "man", "yes", "no", "time", "who", "what", "which", "more", "less", "top",
+                     "history", "clear", "hello", "hi", "hey", "thanks", "ok", "okay", "test", "true",
+                     "false", "read", "write", "find", "make", "install", "update", "cat", "why", "how"}
+SHELL_SYNTAX = re.compile(r"\|\||&&|[|;<>`]|\$\(")
+
+
+def color_ok():
+    return sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+
+def paint(text, code):
+    return f"\033[{code}m{text}\033[0m" if color_ok() else text
+
+
+def input_prompt(text, code):
+    """A coloured prompt that line editing can measure correctly."""
+    return f"\001\033[{code}m\002{text}\001\033[0m\002" if color_ok() else text
+
+
+def set_window_title(text):
+    """Say in the window's title where you are (inside Alias Maker only). The shell puts its own
+    title back at the next prompt."""
+    if in_alias_maker() and sys.stdout.isatty():
+        sys.stdout.write(f"\033]0;{text}\007")
+        sys.stdout.flush()
+
+
+def looks_like_command(text, state):
+    """Whether something typed in the chat reads like a terminal command (or one of the user's own
+    phrases) rather than a question. Chats never run anything; this only decides what to say."""
+    text = text.strip()
+    if not text or text.endswith("?"):
+        return False
+    if normalize(text) in state.custom_map:
+        return True
+    words = text.split()
+    first = words[0]
+    if first in ("sudo", "doas", "pkexec", "run0", "cd", "export", "source", "alias", "unset", "pushd", "popd") \
+            or first.startswith(("./", "/", "~")):
+        return True
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", first) or not shutil.which(first):
+        return False
+    rest = words[1:]
+    if not rest:
+        return first not in ENGLISH_ONE_WORDS
+    if any(re.fullmatch(r"-{1,2}[A-Za-z0-9][\w=-]*", word) for word in rest):
+        return True
+    if any(word.startswith(("/", "./", "../", "~")) for word in rest) or SHELL_SYNTAX.search(text):
+        return True
+    return (first in COMMON_COMMANDS and len(rest) <= 2
+            and not any(word.lower() in STOP_WORDS for word in rest))
+
+
+def show_chat_banner(info, model):
+    lines = [f"AI CHAT with {info['name']}  \u00b7  you are NOT at your terminal prompt",
+             "Everything you type here is just a message. Nothing runs as a command,",
+             "and nothing the AI writes is ever run. Type /bye to go back to your terminal."]
+    width = max(len(line) for line in lines) + 2
+    print(paint("\u256d" + "\u2500" * width + "\u256e", "1;35"))
+    for number, line in enumerate(lines):
+        print(paint("\u2502", "1;35") + " " + paint(line.ljust(width - 1), "1;35" if number == 0 else "35")
+              + paint("\u2502", "1;35"))
+    print(paint("\u2570" + "\u2500" * width + "\u256f", "1;35"))
+    print()
+
+
+def show_ai_reply(info, answer):
+    """The AI's words, every line marked with a bar. Commands it suggests (in a code block, or
+    indented) are marked as text that isn't run."""
+    bar = paint(AI_BAR, "1;35")
+    print(bar + paint(info["name"] + ":", "1;35"))
+    fenced, in_run = False, False
+
+    def end_run():
+        if in_run:
+            print(bar + paint("    \u2191 just text: nothing here ran. Copy it to your terminal if you want it.", "33"))
+
+    for line in answer.splitlines():
+        if line.strip().startswith("```"):
+            if fenced:
+                end_run()
+                in_run = False
+            fenced = not fenced
+            continue
+        if fenced or (line.startswith("    ") and line.strip()):
+            in_run = True
+            print(bar + paint("  \u258c " + line.strip(), "1;36"))
+        else:
+            end_run()
+            in_run = False
+            print(bar + line)
+    end_run()
+    print()
+
+
 def ai_chat(first_message=""):
     config = ai_load()
     if not ai_ready(config):
@@ -1667,38 +1767,55 @@ def ai_chat(first_message=""):
         return 2
     if not ai_first_notice(config):
         return 0
+    state = State([], load_settings(), False)
     info = AI_PROVIDERS[config["provider"]]
-    print(f"Chatting with {info['name']} ({config.get('model')}). It can't see your files or run "
-          "anything. Type /bye to leave.\n")
+    set_window_title(f"AI chat with {info['name']}")
+    show_chat_banner(info, config.get("model"))
     history = []
     text = first_message.strip()
-    while True:
-        if not text:
-            text = ask("You: ")
-            if text is None:
-                print("\nBye!")
-                return 0
-            text = text.strip()
+    prompt = input_prompt(AI_PROMPT, "1;35")
+    try:
+        while True:
             if not text:
+                text = ask(prompt)
+                if text is None:
+                    print()
+                    return 0
+                text = text.strip()
+                if not text:
+                    continue
+            if normalize(text) in AI_QUIT_WORDS:
+                return 0
+            if looks_like_command(text, state):
+                print(paint("That looks like a terminal command. Nothing runs in this chat.", "1;33"))
+                answer = ask(f"Want the AI to explain what it does? (type {yes_hint(state.settings)}; "
+                             "anything else skips) ")
+                if is_yes(answer, state.settings):
+                    text = ("Explain in plain words what this terminal command would do, and tell me if "
+                            f"it's risky. Don't pretend to run it:\n{text}")
+                else:
+                    print("Okay, not sent. To run it, leave with /bye and type it at your terminal prompt.\n")
+                    text = ""
+                    continue
+            history.append({"role": "user", "content": text})
+            text = ""
+            print(paint("(thinking...)", "2"))
+            try:
+                answer = ai_reply(config, history[-AI_MAX_TURNS * 2:])
+            except AIError as error:
+                history.pop()
+                print(f"\n{error}\n")
                 continue
-        if normalize(text) in AI_QUIT_WORDS:
-            print("Bye!")
-            return 0
-        history.append({"role": "user", "content": text})
-        text = ""
-        print("(thinking...)")
-        try:
-            answer = ai_reply(config, history[-AI_MAX_TURNS * 2:])
-        except AIError as error:
-            history.pop()
-            print(f"\n{error}\n")
-            continue
-        except KeyboardInterrupt:
-            history.pop()
-            print("\nOkay, stopped waiting.\n")
-            continue
-        history.append({"role": "assistant", "content": answer})
-        print(f"\n{info['name']}: {answer}\n")
+            except KeyboardInterrupt:
+                history.pop()
+                print("\nOkay, stopped waiting.\n")
+                continue
+            history.append({"role": "assistant", "content": answer})
+            print()
+            show_ai_reply(info, answer)
+    finally:
+        print(paint("\u2500\u2500 Back at your terminal: commands run again. \u2500\u2500", "1;32"))
+        set_window_title("Let'sdostuff~")
 
 
 def ai_setup():

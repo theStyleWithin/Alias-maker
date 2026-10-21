@@ -271,8 +271,8 @@ class TestChat(AITestCase):
         self.set_up_claude()
         code, out, prompts = self.run_doit(["ai"], answers=["how do I unzip?", "and a tar file?", "/bye"])
         self.assertEqual(code, 0)
-        self.assertIn("Claude: Try the unzip command.", out)
-        self.assertEqual(prompts, ["You: "] * 3)
+        self.assertIn(doit.AI_BAR + "Try the unzip command.", out)
+        self.assertEqual(prompts, [doit.AI_PROMPT] * 3)
         first, second = [r["body"]["messages"] for r in self.sent()]
         self.assertEqual([m["content"] for m in first], ["how do I unzip?"])
         self.assertEqual([m["role"] for m in second], ["user", "assistant", "user"])
@@ -294,7 +294,7 @@ class TestChat(AITestCase):
         self.set_up_claude()
         code, out, prompts = self.run_doit(["ai"], answers=["", "  ", "hello"])  # then Ctrl-D
         self.assertEqual(code, 0)
-        self.assertIn("Bye!", out)
+        self.assertIn("Back at your terminal", out)
         self.assertEqual(len(self.sent()), 1)
 
     def test_leaving_words(self):
@@ -302,7 +302,7 @@ class TestChat(AITestCase):
         for word in ("/bye", "bye", "exit", "quit", "never mind", "Goodbye"):
             code, out, _ = self.run_doit(["ai"], answers=[word])
             self.assertEqual(code, 0)
-            self.assertIn("Bye!", out, word)
+            self.assertIn("Back at your terminal", out, word)
         self.assertEqual(self.sent(), [])
 
     def test_a_failed_question_is_explained_and_not_remembered(self):
@@ -342,11 +342,136 @@ class TestChat(AITestCase):
     def test_slash_ai_is_the_same_word(self):
         self.set_up_claude()
         _, out, _ = self.run_doit(["/ai", "hello"], answers=["/bye"])
-        self.assertIn("Claude: Try the unzip command.", out)
+        self.assertIn(doit.AI_BAR + "Try the unzip command.", out)
 
     def test_ai_is_one_of_alias_makers_own_words(self):
         self.assertEqual(doit.phrase_problem("ai", {})[0], "reserved")
         self.assertEqual(doit.phrase_problem("ai helper", {})[0], "reserved")
+
+
+class TestChatIsNotTheTerminal(AITestCase):
+    """Talking to the AI and running commands must look different, and the chat never runs anything."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_up_claude()
+        for name in ("ls", "git", "rm", "find", "cat"):
+            doit_program = self.programs / name
+            doit_program.write_text(f'#!/bin/sh\necho RAN-FOR-REAL-{name} >> "{self.home}/ran.txt"\n')
+            doit_program.chmod(0o755)
+        self.state = doit.State([], doit.load_settings(), False)
+
+    def sent(self):
+        return [r["body"]["messages"] for r in self.ai.requests if r["method"] == "POST"]
+
+    def ran_for_real(self):
+        return (self.home / "ran.txt").exists()
+
+    def test_the_chat_says_loudly_that_it_is_not_the_terminal(self):
+        _, out, _ = self.run_doit(["ai"], answers=["/bye"])
+        self.assertIn("AI CHAT with Claude", out)
+        self.assertIn("you are NOT at your terminal prompt", out)
+        self.assertIn("Nothing runs as a command", out)
+        self.assertIn("Type /bye to go back to your terminal", out)
+        self.assertIn("Back at your terminal: commands run again", out)
+
+    def test_the_chat_prompt_never_looks_like_the_shells(self):
+        self.assertNotIn("Let'sdostuff", doit.AI_PROMPT)
+        self.assertTrue(doit.AI_PROMPT.startswith("AI chat"))
+        _, _, prompts = self.run_doit(["ai"], answers=["hello", "/bye"])
+        self.assertTrue(all(p == doit.AI_PROMPT for p in prompts[:2]))
+
+    def test_every_line_the_ai_writes_is_marked(self):
+        self.ai.reply = "First line.\n\nSecond line."
+        _, out, _ = self.run_doit(["ai"], answers=["hello", "/bye"])
+        reply = out.split(doit.AI_BAR + "Claude:")[1].split("\u2500\u2500 Back")[0]
+        lines = [l for l in reply.splitlines()[1:] if l.strip()]
+        self.assertTrue(lines and all(l.startswith(doit.AI_BAR.strip()) for l in lines), lines)
+
+    def test_commands_the_ai_suggests_are_marked_as_text_that_did_not_run(self):
+        self.ai.reply = "Run this:\n```\nunzip myfiles.zip\n```\nThen look inside."
+        _, out, _ = self.run_doit(["ai"], answers=["how do I unzip", "/bye"])
+        self.assertIn("\u258c unzip myfiles.zip", out)
+        self.assertIn("just text: nothing here ran", out)
+        self.assertNotIn("```", out)
+        self.assertFalse(self.ran_for_real())
+
+    def test_indented_commands_are_marked_too_once_per_block(self):
+        self.ai.reply = "Install it:\n\n    sudo apt install unzip\n    unzip a.zip\n\nThen:\n\n    ls\n\nDone."
+        _, out, _ = self.run_doit(["ai"], answers=["how", "/bye"])
+        self.assertEqual(out.count("just text: nothing here ran"), 2)
+        self.assertIn("\u258c sudo apt install unzip", out)
+        self.assertIn("\u258c unzip a.zip", out)
+        self.assertFalse(self.ran_for_real())
+
+    def test_colours_are_used_on_a_real_terminal_and_switched_off_by_no_color(self):
+        with mock.patch.object(doit, "color_ok", return_value=True):
+            self.assertIn("\x1b[1;35m", doit.paint("hi", "1;35"))
+            self.assertIn("\x01", doit.input_prompt(doit.AI_PROMPT, "1;35"))  # so line editing measures right
+        with mock.patch.object(doit, "color_ok", return_value=False):
+            self.assertEqual(doit.paint("hi", "1;35"), "hi")
+            self.assertEqual(doit.input_prompt(doit.AI_PROMPT, "1;35"), doit.AI_PROMPT)
+
+    def test_the_window_title_says_ai_chat_and_is_given_back(self):
+        written = []
+        fake_out = mock.Mock(write=written.append, flush=lambda: None, isatty=lambda: True)
+        with mock.patch.dict(os.environ, {"ALIASMAKER": "1", "NO_COLOR": "1"}), \
+                mock.patch.object(doit.sys, "stdout", fake_out):
+            doit.set_window_title("AI chat with Claude")
+            doit.set_window_title("Let'sdostuff~")
+        self.assertEqual(written, ["\x1b]0;AI chat with Claude\x07", "\x1b]0;Let'sdostuff~\x07"])
+        written.clear()
+        with mock.patch.dict(os.environ, {"ALIASMAKER": "0"}), mock.patch.object(doit.sys, "stdout", fake_out):
+            doit.set_window_title("x")
+        self.assertEqual(written, [], "other terminals' titles are left alone")
+
+    def test_what_looks_like_a_command(self):
+        yes = ["ls -la", "sudo apt update", "cd /tmp", "git status", "rm -rf ~/old", "./run.sh", "cat notes | grep x",
+               "ls", "/usr/bin/thing", "find . -name x", "ls > out.txt"]
+        no = ["how do I unzip a file?", "find the biggest file", "make a folder for me", "what does ls do",
+              "cat my file", "hello", "thanks", "I need help", "why is my wifi slow", "explain git", ""]
+        for text in yes:
+            self.assertTrue(doit.looks_like_command(text, self.state), text)
+        for text in no:
+            self.assertFalse(doit.looks_like_command(text, self.state), text)
+
+    def test_one_of_your_own_phrases_counts_as_a_command(self):
+        doit.save_custom_command("check my drives", "lsblk", False)
+        state = doit.State([], doit.load_settings(), False)
+        self.assertTrue(doit.looks_like_command("check my drives", state))
+
+    def test_a_pasted_command_is_never_run_and_not_sent_unless_you_ask(self):
+        _, out, prompts = self.run_doit(["ai"], answers=["rm -rf ~/old", "no", "/bye"])
+        self.assertIn("That looks like a terminal command. Nothing runs in this chat.", out)
+        self.assertIn("leave with /bye and type it at your terminal prompt", out)
+        self.assertEqual(self.sent(), [])
+        self.assertFalse(self.ran_for_real())
+
+    def test_you_can_ask_the_ai_to_explain_a_pasted_command(self):
+        _, out, _ = self.run_doit(["ai"], answers=["ls -la /etc", "yes", "/bye"])
+        message = self.sent()[0][0]["content"]
+        self.assertIn("Explain in plain words what this terminal command would do", message)
+        self.assertIn("Don't pretend to run it", message)
+        self.assertTrue(message.endswith("ls -la /etc"))
+        self.assertFalse(self.ran_for_real(), "explaining is not running")
+        self.assertIn(doit.AI_BAR + "Claude:", out)
+
+    def test_a_first_message_that_is_a_command_gets_the_same_care(self):
+        _, out, _ = self.run_doit(["ai", "ls", "-la"], answers=["no", "/bye"])
+        self.assertIn("That looks like a terminal command", out)
+        self.assertEqual(self.sent(), [])
+        self.assertFalse(self.ran_for_real())
+
+    def test_questions_with_command_words_in_them_are_just_sent(self):
+        self.run_doit(["ai"], answers=["what does ls -la do?", "find the biggest file", "/bye"])
+        self.assertEqual([m[-1]["content"] for m in self.sent()], ["what does ls -la do?", "find the biggest file"])
+
+    def test_the_ai_is_told_the_difference_too(self):
+        text = doit.ai_system_prompt()
+        self.assertIn("never a command that gets run", text)
+        self.assertIn("never pretend it ran", text)
+        self.assertIn("fenced code block", text)
+        self.assertIn("after leaving this chat with /bye", text)
 
 
 class TestSetupAndSettings(AITestCase):

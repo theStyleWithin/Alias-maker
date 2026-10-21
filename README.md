@@ -67,6 +67,10 @@ The folder after it still tells you where you are (`~` is your home folder), and
 
 ![The AI settings window: before a key is added, and after the key checks out](docs/mockups/ai-settings-empty.png) ![After the key is checked](docs/mockups/ai-settings-ready.png)
 
+You can always tell where you are. At your normal prompt you see `Let'sdostuff~ ❯`. In an AI chat the window title says **AI chat with Claude**, a purple box says you are *not* at your terminal prompt, your prompt becomes `AI chat ❯`, and every line the AI writes has a purple bar beside it. A command the AI suggests is shown on its own line and marked "just text: nothing here ran". When you leave with `/bye`, it says "Back at your terminal: commands run again." If you type something that looks like a command into the chat (`ls -la`, `sudo ...`, one of your own commands), nothing runs: it says so and offers to have the AI explain it.
+
+![Command mode and AI chat mode in the real window](docs/mockups/ai-chat-vs-terminal.png)
+
 It's only a chat. It can't see your files or your screen, it has no way to run anything, and nothing it writes is ever run: if it suggests a command, you read it and decide. What you type goes to the company whose key you used (Anthropic or xAI), along with the name of your Linux so its commands fit; nothing else is sent. Chats aren't saved on your PC. Your key is kept in a file only your account can read (not encrypted). It's light: no extra programs, no background service, about 20 MB while a chat is open. Other words: `doit ai status`, `doit ai off`, `doit ai forget` (deletes the key), `doit ai setup` (type the key in the terminal instead).
 
 **/clippy, the helper:** type `/clippy` and what you're wondering about, and it looks it up instead of running anything. As soon as you press space, `/clippy` turns into `doit clippy` (so it's never shown in red as an unknown command):
