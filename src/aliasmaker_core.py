@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "Alias Maker"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 DIR_NAME = "alias-maker"
 OLD_DIR_NAME = "doit"
 DEFAULT_SETTINGS = {"logging": None, "yes_words": ["y", "yes"], "clippy_web": None}
@@ -2169,6 +2169,10 @@ def main(argv):
 
     if args:
         code = handle(" ".join(args), state)
+        if code is None and state.suggestion and interactive():  # one close match: just ask
+            answer = ask(f'Do "{state.suggestion}"? (type {yes_hint(state.settings)} to do that) ')
+            if is_yes(answer, state.settings):
+                code = handle(state.suggestion, state)
         return 1 if code is None else code
 
     if not interactive():

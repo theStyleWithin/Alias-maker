@@ -130,6 +130,23 @@ class TestBarePrompt(PhraseTestCase):
         _, out, _ = self.run_doit([], answers=["do teh thing", "never mind"])
         self.assertNotIn("to do that", out)
 
+    def test_did_you_mean_works_straight_from_the_prompt_too(self):
+        code, out, prompts = self.run_doit(["do-teh-thing"], answers=["yes", "no"])
+        self.assertEqual(prompts[0], "Do \"do the thing\"? (type 'y' or 'yes' to do that) ")
+        self.assertIn("Real command: true", out)  # explained first, like any command
+        self.assertEqual(code, 0)
+
+    def test_saying_no_to_a_suggestion_runs_nothing(self):
+        code, out, prompts = self.run_doit(["do", "teh", "thing"], answers=["no"])
+        self.assertEqual(code, 1)
+        self.assertNotIn("Real command", out)
+
+    def test_no_question_when_nobody_is_there(self):
+        code, out, prompts = self.run_doit(["do", "teh", "thing"], tty=False)
+        self.assertEqual(code, 1)
+        self.assertEqual(prompts, [])
+        self.assertIn('Did you mean: "do the thing"?', out)
+
     def test_never_mind_runs_nothing(self):
         code, out, _ = self.run_doit([], answers=["never mind"])
         self.assertEqual(code, 0)
