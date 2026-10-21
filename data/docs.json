@@ -55,7 +55,7 @@
           "id": "ubuntu",
           "name": "Ubuntu documentation",
           "kind": "link",
-          "url": "https://documentation.ubuntu.com/",
+          "url": "https://docs.ubuntu.com/",
           "note": "Linux Mint is built on Ubuntu"
         }
       ]
@@ -70,7 +70,7 @@
           "id": "ubuntu",
           "name": "Ubuntu documentation",
           "kind": "link",
-          "url": "https://documentation.ubuntu.com/"
+          "url": "https://docs.ubuntu.com/"
         }
       ]
     },
