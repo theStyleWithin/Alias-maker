@@ -24,7 +24,7 @@ mkdir -p "$dir/usr/bin" "$dir/usr/lib" "$dir/usr/share"
 EXCLUDE='^(ld-linux[^ ]*|linux-vdso[^ ]*|libc|libm|libdl|libpthread|librt|libutil|libresolv|libnsl|libanl|libBrokenLocale|libthread_db|libnss_[a-z]+)\.so'
 EXCLUDE+='|^(libGL|libGLX|libGLdispatch|libEGL|libOpenGL|libGLES[a-zA-Z0-9_]*|libgbm|libdrm[a-z_-]*|libvulkan)\.so'
 EXCLUDE+='|^(libX11|libX11-xcb|libXau|libXdmcp|libXext|libXrender|libXi|libXcursor|libXfixes|libXrandr|libXinerama|libXdamage|libXcomposite|libXtst|libXxf86vm|libxshmfence|libSM|libICE)\.so'
-EXCLUDE+='|^libxcb[a-z0-9-]*\.so|^libwayland-[a-z-]+\.so|^(libfontconfig|libfreetype)\.so'
+EXCLUDE+='|^libxcb\.so|^libwayland-[a-z-]+\.so|^(libfontconfig|libfreetype)\.so'
 
 declare -A seen=()
 
