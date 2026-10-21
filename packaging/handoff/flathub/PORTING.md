@@ -8,8 +8,8 @@ sandbox with `os.path.exists("/.flatpak-info")`.
 
 Line numbers are for version @VERSION@.
 
-1. **Starting the shell** (`src/aliasmaker`: `user_shell()` around line 79, `shell_argv()`
-   around line 98, the spawn around line 608). Find the host shell with
+1. **Starting the shell** (`src/aliasmaker`: `user_shell()` around line 81, `shell_argv()`
+   around line 109, the spawn around line 636). Find the host shell with
    `flatpak-spawn --host getent passwd $USER`, then start it as
    `flatpak-spawn --host --watch-bus --directory=<folder> --env=TERM=xterm-256color
    --env=PATH=<host PATH plus the folder from step 2> <shell> ...`. Check job control and
@@ -18,7 +18,7 @@ Line numbers are for version @VERSION@.
 2. **Files the host shell uses.** The fish script (`FISH_TITLE_SCRIPT`, line 67), `doit` and
    the engine live in `/app`, which the host can't see. Copy `src/` once per version to a
    host-visible folder (e.g. `~/.local/share/alias-maker/host/`), and use that copy for the
-   `--init-command` path and for the `PATH` set around line 589. They're plain Python and
+   `--init-command` path and for the `PATH` set around line 608. They're plain Python and
    run with the host's `python3`.
 
 3. **One-word commands** (`src/aliasmaker_core.py`, `doit_command()` around line 371). The

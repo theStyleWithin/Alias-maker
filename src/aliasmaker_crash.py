@@ -201,6 +201,61 @@ def os_name():
     return platform.system()
 
 
+# ---------- graphics: keep GTK away from Vulkan ----------
+#
+# On a Steam Deck in desktop mode, Valve's Gamescope Vulkan layer shows a "Gamescope WSI
+# Layer Error" pop-up (a zenity window) whenever GTK 4 draws a window with Vulkan. A
+# terminal has no use for Vulkan, so GTK is pointed at OpenGL, and Vulkan is switched off so
+# GTK can't fall back to it if OpenGL fails. A renderer the user chose is left alone, and
+# the shell inside the window never sees these settings (see graphics_env_fixes).
+
+_graphics_before = {}
+
+
+def use_opengl_not_vulkan():
+    """Call before GTK loads. Returns True if it changed anything."""
+    if os.environ.get("GSK_RENDERER") or _graphics_before:
+        return False
+    for name, value in (("GSK_RENDERER", "ngl"), ("GDK_DEBUG", "vulkan-disable"),
+                        ("GDK_DISABLE", "vulkan")):
+        before = os.environ.get(name)
+        _graphics_before[name] = before
+        os.environ[name] = f"{before},{value}" if before else value
+    return True
+
+
+def graphics_env_fixes():
+    """(restore, remove) for the shell and the programs started from it: the user's own
+    values to put back, and the names to take out again."""
+    restore = {name: value for name, value in _graphics_before.items() if value is not None}
+    remove = [name for name, value in _graphics_before.items() if value is None]
+    return restore, remove
+
+
+# The AppImage's launcher (packaging/appimage/AppRun) points GTK, Python and friends at its
+# own copies. It remembers each variable as ALIASMAKER_ORIG_<NAME>, or ALIASMAKER_WAS_UNSET_<NAME>.
+BUNDLE_VARS = ("GI_TYPELIB_PATH", "GDK_PIXBUF_MODULE_FILE", "GSETTINGS_SCHEMA_DIR",
+               "GIO_MODULE_DIR", "XDG_DATA_DIRS")
+
+
+def bundle_env_fixes():
+    """(restore, remove) that undo the AppImage launcher's settings; empty outside an AppImage."""
+    restore, remove = {}, []
+    for name in BUNDLE_VARS:
+        if f"ALIASMAKER_ORIG_{name}" in os.environ:
+            restore[name] = os.environ[f"ALIASMAKER_ORIG_{name}"]
+        elif os.environ.get(f"ALIASMAKER_WAS_UNSET_{name}"):
+            remove.append(name)
+    return restore, remove
+
+
+def child_env_fixes():
+    """Everything the shell inside the window must get back, from graphics and the AppImage."""
+    restore, remove = graphics_env_fixes()
+    bundle_restore, bundle_remove = bundle_env_fixes()
+    return {**restore, **bundle_restore}, remove + bundle_remove
+
+
 def system_lines():
     desktop = os.environ.get("XDG_CURRENT_DESKTOP") or "unknown"
     session = os.environ.get("XDG_SESSION_TYPE") or ("wayland" if os.environ.get("WAYLAND_DISPLAY")
@@ -213,6 +268,8 @@ def system_lines():
         f"OS: {os_name()}",
         f"Kernel: {platform.release()}",
         f"Desktop: {desktop} ({session})",
+        f"Graphics: GSK_RENDERER={os.environ.get('GSK_RENDERER') or 'default'}"
+        + (", Vulkan switched off" if "vulkan" in (os.environ.get("GDK_DISABLE") or "") else ""),
         f"Shell: {shell}",
         "Libraries: " + ", ".join(libs),
     ]
@@ -482,12 +539,24 @@ def health_check():
     add(OK if py >= (3, 9) else BAD, "Python", platform.python_version()
         + ("" if py >= (3, 9) else " (too old: Alias Maker needs 3.9 or newer)"))
 
+    in_appimage = bool(os.environ.get("ALIASMAKER_BUNDLED_FISH"))
     code, out = _run([sys.executable, "-c", GI_PROBE])
     found = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
-    if code is None or code < 0:
+    if in_appimage:
+        for key, what in (("GTK", "GTK 4"), ("VTE", "VTE (the terminal part)")):
+            if key in found:
+                add(OK, what, f"{found[key]} (built into the AppImage)")
+            else:
+                add(BAD, what, f"the AppImage couldn't load it: {found.get(key + '-missing', out or code)}")
+        found = {"PyGObject": found.get("PyGObject", "?"), "GTK": "x", "VTE": "x"}  # reported above
+    if in_appimage and "PyGObject" not in found:
+        add(BAD, "PyGObject", "the AppImage couldn't load it")
+    elif code is None or code < 0:
         add(BAD, "GTK and VTE", f"checking them crashed ({out or code}). Try: sudo pacman -S gtk4 vte4 python-gobject")
     elif "PyGObject" not in found:
         add(BAD, "PyGObject", "missing. Fix: sudo pacman -S python-gobject")
+    elif in_appimage:
+        add(OK, "PyGObject", f"{found['PyGObject']} (built into the AppImage)")
     else:
         add(OK, "PyGObject", found["PyGObject"])
         add(OK if "GTK" in found else BAD, "GTK 4",
@@ -500,8 +569,12 @@ def health_check():
     else:
         add(WARN, "Screen", "no desktop found (fine over SSH; the window needs a desktop)")
 
+    bundled_fish = os.environ.get("ALIASMAKER_BUNDLED_FISH", "")
     fish = shutil.which("fish")
-    if fish:
+    if bundled_fish and os.access(bundled_fish, os.X_OK):
+        _code, out = _run([bundled_fish, "--version"])
+        add(OK, "fish shell", f"{out.split('version')[-1].strip()} (built into the AppImage)")
+    elif fish:
         _code, out = _run([fish, "--version"])
         add(OK, "fish shell", out.split("version")[-1].strip() or "installed")
     else:
@@ -510,8 +583,12 @@ def health_check():
     for program, why, package in (("fastfetch", "PC info next to the DOIT logo", "fastfetch"),
                                   ("whatis", "descriptions in the Database", "man-db"),
                                   ("xdg-open", "opening /clippy results", "xdg-utils")):
-        add(OK if shutil.which(program) else WARN, program,
-            "installed" if shutil.which(program) else f"missing ({why}). Fix: sudo pacman -S {package}")
+        if shutil.which(program):
+            add(OK, program, "installed")
+        elif in_appimage:  # optional extras: the package names are Arch's, so don't send everyone to pacman
+            add(OK, program, f"not installed (optional: {why})")
+        else:
+            add(WARN, program, f"missing ({why}). Fix: sudo pacman -S {package}")
 
     here = Path(__file__).resolve().parent
     doit_ok = shutil.which("doit") or (here / "doit").exists()

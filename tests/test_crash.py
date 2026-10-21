@@ -46,6 +46,52 @@ class CrashTestCase(unittest.TestCase):
         path.write_text(json.dumps({"version": 1, "commands": commands}))
 
 
+class TestGraphics(CrashTestCase):
+    def setUp(self):
+        super().setUp()
+        for name in ("GSK_RENDERER", "GDK_DEBUG", "GDK_DISABLE"):
+            os.environ.pop(name, None)
+        patch = mock.patch.object(crash, "_graphics_before", {})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_gtk_is_pointed_at_opengl_with_vulkan_off_and_the_shell_never_sees_it(self):
+        os.environ["GDK_DEBUG"] = "portals"
+        self.assertTrue(crash.use_opengl_not_vulkan())
+        self.assertEqual(os.environ["GSK_RENDERER"], "ngl")
+        self.assertEqual(os.environ["GDK_DEBUG"], "portals,vulkan-disable")
+        self.assertEqual(os.environ["GDK_DISABLE"], "vulkan")
+        restore, remove = crash.graphics_env_fixes()
+        self.assertEqual(restore, {"GDK_DEBUG": "portals"})
+        self.assertEqual(sorted(remove), ["GDK_DISABLE", "GSK_RENDERER"])
+        self.assertFalse(crash.use_opengl_not_vulkan(), "only the first call changes anything")
+        self.assertIn("GSK_RENDERER=ngl, Vulkan switched off", "\n".join(crash.system_lines()))
+
+    def test_a_renderer_the_user_chose_is_left_alone(self):
+        os.environ["GSK_RENDERER"] = "vulkan"
+        self.assertFalse(crash.use_opengl_not_vulkan())
+        self.assertEqual(os.environ["GSK_RENDERER"], "vulkan")
+        self.assertNotIn("GDK_DISABLE", os.environ)
+        self.assertEqual(crash.graphics_env_fixes(), ({}, []))
+
+
+class TestAppImageEnvironment(CrashTestCase):
+    def test_the_launchers_settings_are_undone_for_the_shell(self):
+        env = {"ALIASMAKER_ORIG_XDG_DATA_DIRS": "/usr/share", "XDG_DATA_DIRS": "/app/usr/share:/usr/share",
+               "ALIASMAKER_WAS_UNSET_GI_TYPELIB_PATH": "1", "GI_TYPELIB_PATH": "/app/typelibs",
+               "ALIASMAKER_ORIG_GSETTINGS_SCHEMA_DIR": "", "GSETTINGS_SCHEMA_DIR": "/app/schemas"}
+        with mock.patch.dict(os.environ, env):
+            restore, remove = crash.bundle_env_fixes()
+        self.assertEqual(restore, {"XDG_DATA_DIRS": "/usr/share", "GSETTINGS_SCHEMA_DIR": ""})
+        self.assertEqual(remove, ["GI_TYPELIB_PATH"])
+
+    def test_outside_an_appimage_there_is_nothing_to_undo(self):
+        for name in crash.BUNDLE_VARS:
+            os.environ.pop(f"ALIASMAKER_ORIG_{name}", None)
+            os.environ.pop(f"ALIASMAKER_WAS_UNSET_{name}", None)
+        self.assertEqual(crash.bundle_env_fixes(), ({}, []))
+
+
 class TestScrub(CrashTestCase):
     def test_hides_private_details(self):
         text = (f"{self.home}/notes.txt by {getpass.getuser()} on {socket.gethostname()} "
