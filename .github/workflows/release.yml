@@ -126,7 +126,7 @@ jobs:
         run: |
           v="${{ needs.check.outputs.version }}"
           cat > body.md <<EOF
-          Alias Maker $v for CachyOS. This is a test version: please report anything that goes wrong.
+          Alias Maker $v. An early version: please report anything that goes wrong.
 
           **Pick one way to install:**
 
@@ -158,7 +158,7 @@ jobs:
           warning=$(cat packaging/release-warning.md)
           for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
             body=$(gh release view "$tag" --json body --jq .body)
-            case "$body" in *"has not been tested on a real machine"*) continue ;; esac
+            case "$body" in *"at your own risk"*) continue ;; esac
             printf '%s\n\n%s\n\n%s\n' "$warning" "$body" "$warning" > old-notes.md
             gh release edit "$tag" --notes-file old-notes.md
           done
