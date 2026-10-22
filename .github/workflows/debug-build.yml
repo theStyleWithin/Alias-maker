@@ -10,6 +10,9 @@ on:
       ref:
         description: "Branch, tag or commit to build"
         default: main
+      epoch:
+        description: "Build time stamp (a number). Empty uses packaging/appimage/SOURCE_DATE_EPOCH. The same number always gives the same file; a different number gives a different file from the same source."
+        default: ""
 
 permissions:
   contents: write
@@ -29,22 +32,35 @@ jobs:
           sudo apt-get install -y -q --no-install-recommends patchelf curl binutils \
             python3-gi python3-cairo gir1.2-gtk-4.0 gir1.2-vte-3.91 libgtk-4-common librsvg2-common \
             adwaita-icon-theme shared-mime-info libglib2.0-bin libgdk-pixbuf2.0-bin
-      - name: Build the AppImages
+      - name: Build the AppImages (twice, to check the build is repeatable)
+        env:
+          SOURCE_DATE_EPOCH: ${{ inputs.epoch }}
         run: |
           packaging/build-appimage.sh
+          cp dist/Alias-Maker-x86_64.AppImage "$RUNNER_TEMP/first.AppImage"
+          packaging/build-appimage.sh
+          if cmp -s "$RUNNER_TEMP/first.AppImage" dist/Alias-Maker-x86_64.AppImage; then
+            echo "Repeatable: two builds gave the same file."
+          else
+            echo "::error::Two builds of the same source gave different files, so a scan of this file would not carry over to a release."
+            exit 1
+          fi
           rm dist/appimagetool
           (cd dist && sha256sum -- *.AppImage > SHA256SUMS)
       - name: Put them in a private draft release
         run: |
           sha=$(git rev-parse --short HEAD)
-          # only the debug drafts made by this workflow are replaced, never a real release
-          for tag in $(gh release list --limit 50 --json tagName,isDraft --jq '.[] | select(.isDraft and (.tagName | startswith("debug-"))) | .tagName'); do
+          epoch="${{ inputs.epoch }}"; [ -n "$epoch" ] || epoch=$(tr -d '[:space:]' < packaging/appimage/SOURCE_DATE_EPOCH)
+          # keep the 12 newest test drafts side by side, delete older ones (never a real release)
+          gh release list --limit 100 --json tagName,isDraft --jq '[.[] | select(.isDraft and (.tagName | startswith("debug-")))] | .[12:] | .[].tagName' | while read -r tag; do
             gh release delete "$tag" --yes
           done
           cat > notes.md <<NOTES
           Private draft: only people who can write to this repo can see it. Not a release.
 
-          Built from \`${{ inputs.ref }}\` ($sha). Download the AppImage, scan it (for example at virustotal.com), and only share it once you're happy. \`SHA256SUMS\` lists the fingerprint of each file.
+          Built from \`${{ inputs.ref }}\` ($sha) with time stamp $epoch. Download the AppImage, scan it (for example at virustotal.com), and only share it once you're happy. \`SHA256SUMS\` lists the fingerprint of each file. The same source and time stamp give the same file again, so a release built later from this source has this exact fingerprint.
+
+          $(cat dist/SHA256SUMS)
           NOTES
-          gh release create "debug-$sha" dist/*.AppImage dist/SHA256SUMS --draft --prerelease \
-            --title "Debug build $sha (private draft)" --notes-file notes.md
+          gh release create "debug-$sha-$epoch" dist/*.AppImage dist/SHA256SUMS --draft --prerelease \
+            --title "Debug build $sha (stamp $epoch)" --notes-file notes.md

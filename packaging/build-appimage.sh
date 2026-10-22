@@ -20,6 +20,14 @@ if [ ! -x "$tool" ]; then
 fi
 export APPIMAGE_EXTRACT_AND_RUN=1  # build machines often have no FUSE
 
+# Repeatable builds: the same source gives the same file, byte for byte, so a file that was scanned
+# (for example on VirusTotal) is the file that gets released. Every file gets this one time stamp,
+# and the pre-compiled Python files don't remember this build's temporary folder.
+# packaging/appimage/SOURCE_DATE_EPOCH holds the time stamp: change that number to get a different
+# (but still repeatable) file from the same source.
+epoch="${SOURCE_DATE_EPOCH:-$(tr -d '[:space:]' < "$here/appimage/SOURCE_DATE_EPOCH")}"
+export SOURCE_DATE_EPOCH="$epoch"
+
 # Everything both AppImages share: the bundle, Alias Maker's files, a doit that brings its Python
 bundle="$work/bundle"
 bash "$here/appimage/make-bundle.sh" "$bundle" >/dev/null
@@ -31,7 +39,7 @@ exec "${0%/*}/../../../../AppRun" doit "$@"
 SHIM
 chmod +x "$bundle/usr/lib/alias-maker/bin/doit"
 # Compiled ahead of time, because the AppImage is read-only: faster to open
-"$bundle/usr/bin/python3" -m compileall -q --invalidation-mode unchecked-hash \
+"$bundle/usr/bin/python3" -m compileall -q -f --invalidation-mode unchecked-hash -s "$bundle" -p / \
     "$bundle/usr/lib/python3.12" "$bundle/usr/lib/python3" "$bundle/usr/lib/alias-maker/src" >/dev/null || true
 
 build() {  # build <file name> <program it opens> <app name> <comment> <categories>
@@ -51,6 +59,7 @@ Terminal=false
 Categories=$5
 X-AppImage-Version=$version
 DESKTOP
+    find "$dir" -exec touch -h -d "@$epoch" {} +
     ARCH=x86_64 VERSION="$version" "$tool" -n --comp zstd "$dir" "$dist/$1-x86_64.AppImage" >/dev/null
     rm -rf "$dir"
     echo "$dist/$1-x86_64.AppImage"
