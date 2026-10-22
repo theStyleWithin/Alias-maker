@@ -42,5 +42,6 @@ Current goal: the author calls the project feature complete for now (1.1.0); it'
 - Never write a shortcut that hides a real program, fish built-in or CachyOS alias.
 - Always show the real command before running it, and never run an unknown phrase on a guess.
 - Keep user-facing text in plain words for someone new to Linux.
+- Parked side projects, in this order and only after the antivirus flag is sorted out and the author says go: terminal games `/play` (`docs/ideas/terminal-games.md`), then the Android version, then voice typing. Don't start them unasked.
 - Android version (idea only, `docs/ideas/android-trainer.md`): it is an emulator/simulator, never a real terminal on the phone. Nothing typed there runs on the phone itself; ask the author before any exception.
 - Update the Status table in `docs/DESIGN.md` when something gets built or tested.
