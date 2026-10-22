@@ -1,8 +1,6 @@
 """The ☰ → AI window, driven for real on a (virtual) screen against a stand-in AI service.
 Skipped when GTK or a display isn't there. Run with: xvfb-run -a python3.12 -m unittest tests.test_ai_window"""
 
-import importlib.machinery
-import importlib.util
 import os
 import sys
 import time
@@ -12,16 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_ai import AITestCase, CLAUDE_KEY, GROK_KEY, doit  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
-mod = None
-if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
-    try:
-        loader = importlib.machinery.SourceFileLoader("aliasmaker_window", str(ROOT / "src" / "aliasmaker"))
-        spec = importlib.util.spec_from_loader("aliasmaker_window", loader)
-        mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
-    except (ImportError, ValueError, SystemExit):
-        mod = None
+from winmod import mod  # noqa: E402
 
 
 class StubTerminal:

@@ -64,6 +64,7 @@ The window puts `src/` first on the shell's `PATH`, so `doit` works inside Alias
 | Database: scan of every program on this PC, with search | Built |
 | Alias Maker terminal window with ☰ menu: Database, Custom Commands | Built; works on Ubuntu 24.04 (GTK 4.14, VTE 0.76), untested on CachyOS |
 | Konsole-style menu items and shortcuts (New Window, Copy, Paste, Full Screen, font size) | Built, untested on real hardware |
+| Tabs: **+** New Tab button at the top left of the title bar, tab bar once there are 2+ tabs, per-tab close buttons, Ctrl+Shift+T / Ctrl+Shift+W / Ctrl+PageUp / Ctrl+PageDown, per-tab title and font size; minimize, maximize and close always shown on the right (`set_decoration_layout`, because the author's Steam Deck KDE gave GTK a close-only layout) | Built (1.5.0); tested on a virtual screen (13 window tests); the buttons and tabs not yet seen on the real Deck |
 | Text menu (`doit menu`), terminal search (`doit search`), `doit my commands`, `doit rescan` | Removed: the window's ☰ menu and Database replace them |
 | Terminal Settings in the ☰ menu: command log switch, Command Log table, yes word | Built, untested on real hardware |
 | Terminal commands kept for people learning the terminal: `doit create`, `doit forget`/`doit delete` | Built |
@@ -160,6 +161,8 @@ Custom Commands  ▸       only appears once the user has made a command; opens 
 Create Command
 Terminal Settings        the command log and how to say yes
 ──────────
+New Tab                  Ctrl+Shift+T
+Close Tab                Ctrl+Shift+W
 New Window               Ctrl+Shift+N
 Copy                     Ctrl+Shift+C
 Paste                    Ctrl+Shift+V

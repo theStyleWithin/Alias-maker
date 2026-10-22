@@ -450,11 +450,13 @@ class TerminalWindow(Gtk.ApplicationWindow):
         self.set_default_size(960, 580)
         self.set_icon_name("utilities-terminal")
 
-        self.term = Vte.Terminal()
-        self.term.set_scrollback_lines(10000)
-        self.term.set_hexpand(True)
-        self.term.set_vexpand(True)
-        self.set_child(self.term)
+        # Tabs, like Konsole: the tab bar only shows once there is more than one tab.
+        self.notebook = Gtk.Notebook()
+        self.notebook.set_scrollable(True)
+        self.notebook.set_show_tabs(False)
+        self.notebook.set_show_border(False)
+        self.notebook.connect("switch-page", self.on_page_switched)
+        self.set_child(self.notebook)
 
         self.title_label = Gtk.Label(label=core.APP)
         self.title_label.add_css_class("title")
@@ -468,6 +470,13 @@ class TerminalWindow(Gtk.ApplicationWindow):
 
         header = Gtk.HeaderBar()
         header.set_title_widget(title_box)
+        # Always minimize, maximize and close on the right (some desktops, KDE's among them, hand GTK a
+        # layout with only a close button), and a New Tab button on the left, like Konsole.
+        header.set_decoration_layout(":minimize,maximize,close")
+        new_tab = Gtk.Button.new_from_icon_name("tab-new-symbolic")
+        new_tab.set_tooltip_text("New tab (Ctrl+Shift+T)")
+        new_tab.connect("clicked", lambda *_: self.new_tab())
+        header.pack_start(new_tab)
         self.menu_button = Gtk.MenuButton()
         self.menu_button.set_icon_name("open-menu-symbolic")
         self.menu_button.set_tooltip_text("Menu")
@@ -492,19 +501,81 @@ class TerminalWindow(Gtk.ApplicationWindow):
         keys.connect("key-pressed", self.on_key)
         self.add_controller(keys)
 
-        self.term.connect("child-exited", lambda *_: self.close())
-        for signal in ("window-title-changed", "termprop-changed"):  # older and newer VTE
-            try:
-                self.term.connect(signal, self.on_title_changed)
-            except TypeError:
-                pass
         self.connect("notify::is-active", self.on_active_changed)
         self.connect("close-request", self.on_close_request)
 
         app.scanner.listeners.append(self.on_scan_changed)
         self.on_scan_changed()
-        self.spawn(workdir, command)
+        self.add_tab(workdir, command)
+
+    # --- tabs ---
+
+    @property
+    def term(self):
+        """The terminal in the tab you're looking at."""
+        return self.notebook.get_nth_page(max(self.notebook.get_current_page(), 0))
+
+    def terminals(self):
+        return [self.notebook.get_nth_page(i) for i in range(self.notebook.get_n_pages())]
+
+    def add_tab(self, workdir=None, command=None):
+        """Open a terminal in a new tab and switch to it."""
+        term = Vte.Terminal()
+        term.set_scrollback_lines(10000)
+        term.set_hexpand(True)
+        term.set_vexpand(True)
+        label = Gtk.Label(label="Terminal")
+        label.set_ellipsize(Pango.EllipsizeMode.END)
+        label.set_max_width_chars(22)
+        label.set_hexpand(True)
+        close = Gtk.Button.new_from_icon_name("window-close-symbolic")
+        close.add_css_class("flat")
+        close.set_focus_on_click(False)
+        close.set_tooltip_text("Close tab (Ctrl+Shift+W)")
+        close.connect("clicked", lambda *_: self.close_tab(term))
+        tab = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        tab.append(label)
+        tab.append(close)
+        term.tab_label = label
+        index = self.notebook.append_page(term, tab)
+        self.notebook.set_tab_reorderable(term, True)
+        self.notebook.set_show_tabs(self.notebook.get_n_pages() > 1)
+        term.connect("child-exited", lambda t, *_: self.close_tab(t))
+        for signal in ("window-title-changed", "termprop-changed"):  # older and newer VTE
+            try:
+                term.connect(signal, lambda t, *args: self.on_title_changed(t, *args))
+            except TypeError:
+                pass
+        self.notebook.set_current_page(index)
+        self.spawn(workdir, command, term)
+        term.grab_focus()
+        return term
+
+    def new_tab(self):
+        crash.note("terminal tab opened")
+        self.add_tab()
+
+    def close_tab(self, term=None):
+        """Close a tab (the current one by default). The last tab closing closes the window."""
+        term = term or self.term
+        page = self.notebook.page_num(term)
+        if page < 0:
+            return
+        if self.notebook.get_n_pages() == 1:
+            self.close()
+            return
+        self.notebook.remove_page(page)
+        self.notebook.set_show_tabs(self.notebook.get_n_pages() > 1)
         self.term.grab_focus()
+
+    def switch_tab(self, step):
+        count = self.notebook.get_n_pages()
+        self.notebook.set_current_page((self.notebook.get_current_page() + step) % count)
+
+    def on_page_switched(self, _notebook, term, _number):
+        # GTK says this just before the page changes, so show this tab's title directly
+        self.show_title(term)
+        GLib.idle_add(term.grab_focus)
 
     def build_menu(self):
         menu = Gio.Menu()
@@ -522,7 +593,9 @@ class TerminalWindow(Gtk.ApplicationWindow):
         ours.append("Terminal Settings", "win.terminal-settings")
         menu.append_section(None, ours)
         sections = [
-            [("New Window", "win.new-window", "<Control><Shift>n"),
+            [("New Tab", "win.new-tab", "<Control><Shift>t"),
+             ("Close Tab", "win.close-tab", "<Control><Shift>w"),
+             ("New Window", "win.new-window", "<Control><Shift>n"),
              ("Copy", "win.copy", "<Control><Shift>c"),
              ("Paste", "win.paste", "<Control><Shift>v")],
             [("Full Screen Mode", "win.fullscreen", "F11"),
@@ -565,6 +638,8 @@ class TerminalWindow(Gtk.ApplicationWindow):
             "delete-command": lambda: self.app.show_custom(self, "delete"),
             "ai": lambda: self.app.show_ai(self),
             "terminal-settings": lambda: self.app.show_settings(self),
+            "new-tab": self.new_tab,
+            "close-tab": self.close_tab,
             "new-window": self.app.new_window,
             "copy": self.copy,
             "paste": self.paste,
@@ -582,7 +657,8 @@ class TerminalWindow(Gtk.ApplicationWindow):
 
     # --- the shell inside ---
 
-    def spawn(self, workdir, command):
+    def spawn(self, workdir, command, term=None):
+        term = term or self.term
         shell = user_shell()
         if command and len(command) == 1 and " " in command[0]:
             argv = [shell, "-c", command[0]]
@@ -605,12 +681,12 @@ class TerminalWindow(Gtk.ApplicationWindow):
         cwd = workdir if workdir and os.path.isdir(workdir) else os.path.expanduser("~")
         if NEW_CRASHES and not command:
             NEW_CRASHES.clear()  # say it once, in the first window
-            self.term.feed(("\x1b[1;33mAlias Maker closed suddenly last time. A crash report was "
+            term.feed(("\x1b[1;33mAlias Maker closed suddenly last time. A crash report was "
                             "saved: open the \u2630 menu, then Report a Problem.\x1b[0m\r\n").encode())
         if not command and os.path.basename(shell) != "fish":
             # fish shows the DOIT welcome itself (lets-do-stuff.fish); for other shells, show it here
             try:
-                self.term.feed(core.welcome_text(inside=True).replace("\n", "\r\n").encode())
+                term.feed(core.welcome_text(inside=True).replace("\n", "\r\n").encode())
             except (TypeError, OSError):
                 pass
         def started(_terminal, _pid, error, *_rest):
@@ -618,17 +694,17 @@ class TerminalWindow(Gtk.ApplicationWindow):
                 return
             # Say why in plain words instead of leaving an empty terminal, and keep a report
             message = getattr(error, "message", str(error))
-            self.term.feed(("\x1b[1;31mAlias Maker couldn't start the shell: %s\x1b[0m\r\n"
+            term.feed(("\x1b[1;31mAlias Maker couldn't start the shell: %s\x1b[0m\r\n"
                             "Open the \u2630 menu, then Report a Problem.\r\n" % message).replace("\n", "\r\n").encode())
             crash.record_startup_problem(f"The shell couldn't start: {message}", " ".join(argv[:3]))
 
         args = [Vte.PtyFlags.DEFAULT, cwd, argv, envv, GLib.SpawnFlags.SEARCH_PATH,
                 None, None, -1, None, started, None]
         try:
-            self.term.spawn_async(*args)
+            term.spawn_async(*args)
         except TypeError:
             del args[6]  # older PyGObject: no separate child-setup data argument
-            self.term.spawn_async(*args)
+            term.spawn_async(*args)
 
     def type_into_terminal(self, text, run=False):
         """Put text at the prompt. With run=True, clear the line first and press Enter."""
@@ -677,8 +753,12 @@ class TerminalWindow(Gtk.ApplicationWindow):
         if keyval == Gdk.KEY_F11 and not mods:
             self.toggle_fullscreen()
             return True
-        if mods == control | shift and name in ("c", "v", "n"):
-            {"c": self.copy, "v": self.paste, "n": self.app.new_window}[name]()
+        if mods == control | shift and name in ("c", "v", "n", "t", "w"):
+            {"c": self.copy, "v": self.paste, "n": self.app.new_window,
+             "t": self.new_tab, "w": self.close_tab}[name]()
+            return True
+        if mods == control and name.lower() in ("page_down", "page_up"):
+            self.switch_tab(1 if name.lower() == "page_down" else -1)
             return True
         if mods & control and not mods & alt:
             if name in ("plus", "equal", "kp_add"):
@@ -694,24 +774,35 @@ class TerminalWindow(Gtk.ApplicationWindow):
 
     # --- window state ---
 
-    def current_title(self):
+    def current_title(self, term=None):
         """The title the shell set (Let'sdostuff~ with fish), on old and new VTE alike."""
+        term = term or self.term
         try:
-            title = self.term.get_window_title()
+            title = term.get_window_title()
             if title:
                 return title
         except (AttributeError, TypeError):
             pass
         try:
-            value = self.term.get_termprop_string("xterm.title")
+            value = term.get_termprop_string("xterm.title")
             return value[0] if isinstance(value, tuple) else value
         except (AttributeError, TypeError, GLib.Error):
             return None
 
-    def on_title_changed(self, _term=None, prop=None, *_):
+    def on_title_changed(self, term=None, prop=None, *_):
         if isinstance(prop, str) and prop not in ("xterm.title", "vte.xterm.title"):
             return  # some other terminal property changed
-        title = self.current_title()
+        term = term or self.term
+        title = self.current_title(term)
+        label = getattr(term, "tab_label", None)
+        if label is not None:
+            label.set_label(title or "Terminal")
+        if term is self.term:  # the window shows the title of the tab you're looking at
+            self.show_title(term)
+
+    def show_title(self, term):
+        """Put a tab's title in the window's title bar."""
+        title = self.current_title(term)
         self.title_label.set_label(title or core.APP)
         self.set_title(f"{title} — {core.APP}" if title else core.APP)
 
