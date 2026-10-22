@@ -10,6 +10,10 @@ The author wants to finish testing the AppImages and the virus scans first. The 
 - **Terminal games are a feature** of this app (`/play`, cartridge text files, nothing typed ever reaches the shell; see `terminal-games.md`).
 - **Every command should work**, inside a hardened container, so that nothing runs on the phone itself. (This replaces the first plan of a small pretend shell; see "Why not a pretend shell" below.)
 
+## The rule (the author's)
+
+**Only the Android version is an emulator/simulator. It is never a real terminal on the phone.** The PC app (AppImage, installer, packages) stays a real terminal. Nothing typed in the Android app is ever run by the phone itself, and no feature, shortcut or "just this once" exception may change that. Anything that would need the phone to run a program (Plan B below included) needs the author's explicit yes first.
+
 ## What it is
 
 An Android app for people who like to dabble with the terminal. It is a **toy and a daily practice tool**, not a way to run a computer from a phone.
