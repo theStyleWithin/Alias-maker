@@ -138,7 +138,7 @@ jobs:
           | \`Alias-Maker-Debug-x86_64.AppImage\` | The same self-contained build, opening Alias Maker Debug (crash reports and the health check). |
           | \`alias-maker-aur-handoff.tar.gz\`, \`alias-maker-flathub-handoff.tar.gz\` | For packagers: Alias Maker isn't published on the AUR or Flathub by its author. Anyone is welcome to; these kits are a head start (read the README inside). |
 
-          **If something goes wrong:** open **Alias Maker Debug** (from your app launcher, ☰ → Report a Problem, \`aliasmaker-debug\`, or the Debug AppImage), click **Save Everything for the Developer**, and send the file it makes. It never includes what you typed in the terminal, and you can read every word before sending it.
+          **If something goes wrong:** open **Alias Maker Debug** (from your app launcher, ☰ → Report a Problem, \`aliasmaker-debug\`, or the Debug AppImage), click **Save Everything for the Developer**, and attach the file it makes to a bug report on [GitHub Issues](https://github.com/theStyleWithin/Alias-maker/issues). It never includes what you typed in the terminal, and you can read every word before sending it.
 
           **Antivirus warnings:** a few antivirus engines flag some AppImages: the launcher at the front of every one is a compressed, self-unpacking program, which looks like a packed virus to them, and this one also carries a lot of ready-made programs. Everything inside comes from known places: Ubuntu 24.04's own Python, GTK 4, VTE and their libraries (stripped, with their library search path changed so they find each other inside the AppImage), AppImage's official launcher, and Alias Maker's own files from this repo. To check a download is the genuine one, built by GitHub from this repo's public source:
 
@@ -147,19 +147,20 @@ jobs:
 
           If you'd rather avoid AppImages, the installer and the pacman package are plain scripts and files you can read.
           EOF
-          # The not-tested-yet warning goes at the top and again at the end.
+          # The "which downloads are tested" note goes at the top and again at the end.
           { cat packaging/release-warning.md; echo; cat body.md; echo; cat packaging/release-warning.md; } > notes.md
           gh release create "v$v" release/* \
             --target "$GITHUB_SHA" --title "Alias Maker $v" \
             --notes-file notes.md --generate-notes
 
-      - name: Put the warning on older releases too
+      - name: Put the current note on older releases too
         run: |
           warning=$(cat packaging/release-warning.md)
           for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
             body=$(gh release view "$tag" --json body --jq .body)
-            case "$body" in *"at your own risk"*) continue ;; esac
-            printf '%s\n\n%s\n\n%s\n' "$warning" "$body" "$warning" > old-notes.md
+            case "$body" in *"only tests the **AppImages**"*) continue ;; esac
+            # Drop any older warning (the "use at your own risk" wording) before adding the current note.
+            printf '%s\n' "$body" | awk '!/^> \[!(WARNING|NOTE)\]/ && !/^> \*\*(Early version|Which downloads)/' > old-body.md
+            printf '%s\n\n%s\n\n%s\n' "$warning" "$(cat old-body.md)" "$warning" > old-notes.md
             gh release edit "$tag" --notes-file old-notes.md
           done
-

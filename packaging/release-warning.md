@@ -1,2 +1,2 @@
-> [!WARNING]
-> **Early version: use at your own risk.** Alias Maker is new. So far it has been run on one real Steam Deck (SteamOS) and on clean Ubuntu test systems, and not yet on other PCs. If you'd rather be careful, try it in a virtual machine first. If something goes wrong, open **Alias Maker Debug** and send the report file it saves.
+> [!NOTE]
+> **Which downloads are tested:** the developer only tests the **AppImages** (the standard one and Alias Maker Debug). The other downloads (the installer, the pacman package, and the AUR and Flathub kits) still need further testing. **Report bugs on [GitHub Issues](https://github.com/theStyleWithin/Alias-maker/issues) until further notice.** If something crashes, open **Alias Maker Debug** and attach the report file it saves.
