@@ -87,7 +87,9 @@ The first time, `/clippy` asks whether it may also search question-and-answer si
 
 `/clippy` points you at the documentation of the system Alias Maker detects on your PC: the CachyOS wiki on CachyOS, the Steam Community forums and the Arch Wiki on SteamOS (it's built on Arch), the Arch Wiki on Arch, the Manjaro wiki on Manjaro, the Linux Mint guide on Mint, Ubuntu's documentation on Ubuntu. It never sends you to another system's pages: if it doesn't know your system's documentation yet, it says so and only looks on your PC. The list lives in `data/docs.json` (one entry per system, easy to extend: Debian, Fedora and more are waiting for someone to add their documentation links).
 
-The rest of the menu works like Konsole's: New Window, Copy, Paste, Full Screen, and font size, with the same shortcuts.
+The rest of the menu works like Konsole's: New Tab, Close Tab, New Window, Copy, Paste, Full Screen, and font size, with the same shortcuts.
+
+**Tabs, like Konsole:** the **+** button at the top left of the title bar (or `Ctrl+Shift+T`) opens a new tab. The tab bar appears once you have more than one, each tab has its own **×** (or `Ctrl+Shift+W`), and `Ctrl+PageUp` / `Ctrl+PageDown` switch between them. Each tab is its own shell and keeps its own title and text size; closing the last tab closes the window. The title bar always has minimize, maximize and close buttons on the right, even on desktops that only offer a close button to GTK apps.
 
 ## Install
 
