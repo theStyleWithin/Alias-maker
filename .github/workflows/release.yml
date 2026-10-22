@@ -153,14 +153,26 @@ jobs:
             --target "$GITHUB_SHA" --title "Alias Maker $v" \
             --notes-file notes.md --generate-notes
 
-      - name: Put the current note on older releases too
+  # Keeps every release's notes on the current note (packaging/release-warning.md). It runs on
+  # every push to main and on a manual run, so changing the note doesn't need a new version.
+  notes:
+    needs: [check, publish]
+    if: always() && needs.check.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Put the current note on every release
         run: |
           warning=$(cat packaging/release-warning.md)
           for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
             body=$(gh release view "$tag" --json body --jq .body)
-            case "$body" in *"only tests the **AppImages**"*) continue ;; esac
-            # Drop any older warning (the "use at your own risk" wording) before adding the current note.
-            printf '%s\n' "$body" | awk '!/^> \[!(WARNING|NOTE)\]/ && !/^> \*\*(Early version|Which downloads)/' > old-body.md
+            # Already the current note, and no older "at your own risk" wording left: nothing to do.
+            case "$body" in
+              *"at your own risk"*) ;;
+              *"only tests the **AppImages**"*) continue ;;
+            esac
+            # Drop any older warning (every wording so far) before adding the current note.
+            printf '%s\n' "$body" | awk '!/^> \[!(WARNING|NOTE)\]/ && !/^> \*\*(Early version|Install at your own risk|Which downloads)/' > old-body.md
             printf '%s\n\n%s\n\n%s\n' "$warning" "$(cat old-body.md)" "$warning" > old-notes.md
             gh release edit "$tag" --notes-file old-notes.md
           done
