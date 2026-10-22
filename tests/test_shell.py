@@ -224,6 +224,25 @@ class TestBashTypoHelper(DoitTestCase):
         self.assertIn("not running anything", out)
         self.assertNotIn("ZZ-RAN", out)
 
+    @unittest.skipIf(shutil.which("zypper"), "this PC really has zypper, so it would not be 'another Linux'")
+    def test_a_command_from_another_linux_gets_this_systems_version(self):
+        # zypper (openSUSE) typed on a pretend Arch: the real one must never be found and run
+        osr = self.home / "os-release"
+        osr.write_text('ID=arch\nPRETTY_NAME="Arch test"\n')
+        make_program(self.tools, "pacman", "true")
+        env = {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / "config"),
+               "XDG_DATA_HOME": str(self.home / "data"), "TERM": "xterm", "LANG": "C.UTF-8",
+               "PATH": f"{self.tools}:/usr/bin:/bin", "DOIT_EXAMPLES": os.environ["DOIT_EXAMPLES"],
+               "ALIASMAKER_OS_RELEASE": str(osr)}
+        bash = Bash(env, self.home)
+        self.addCleanup(bash.close)
+        self.assertTrue(bash.wait_for("Let'sdostuff~"), bash.seen)
+        out = bash.run("zypper install gimp", "1)")
+        self.assertIn("is for openSUSE", out)
+        self.assertIn("1) sudo pacman -S gimp", out)
+        out = bash.run("", "not running anything")
+        self.assertIn("not running anything", out)
+
 
 if __name__ == "__main__":
     unittest.main()
